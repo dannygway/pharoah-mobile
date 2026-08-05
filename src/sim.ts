@@ -1,0 +1,1303 @@
+/**
+ * The city simulation.
+ *
+ * Everything runs on a fixed tick. `TICKS_PER_MONTH` ticks make a month, twelve months
+ * make a year, and the year is divided into the three Egyptian seasons. The renderer
+ * never advances the simulation; it only interpolates between the last two states.
+ */
+
+import { RNG, clamp, approach } from './core';
+import {
+  BUILDING_BY_ID, BuildingDef, GOODS, GoodId, FOOD_IDS, HOUSEHOLD_GOODS, HOUSING,
+  ServiceId, GodId, GOD_IDS, RELIGION_SERVICE, LaborSector, seasonOfMonth, Season, MONTHS,
+} from './data';
+import { World, Terrain } from './world';
+import { TICKS_PER_MONTH, TICKS_PER_YEAR, SERVICE_DURATION as SVC_TICKS } from './consts';
+import { Walker, WalkerSystem } from './walkers';
+
+export { TICKS_PER_MONTH, TICKS_PER_YEAR, SERVICE_DURATION } from './consts';
+
+export interface HouseState {
+  level: number;
+  people: number;
+  /** Food units held, by type. */
+  foods: Partial<Record<GoodId, number>>;
+  goods: Partial<Record<GoodId, number>>;
+  /** Ticks of freshness remaining, per service. */
+  services: Partial<Record<ServiceId, number>>;
+  health: number;
+  /** Consecutive months this household has gone short of food. */
+  hunger: number;
+  /** Ticks since a tax collector called. */
+  taxFresh: number;
+  crime: number;
+  /** Cached evolution result for the UI: what is blocking the next level. */
+  blocker: string;
+}
+
+export interface MonumentState {
+  stage: number;
+  laborDone: number;
+  delivered: Partial<Record<GoodId, number>>;
+  complete: boolean;
+}
+
+export interface GarrisonState {
+  strength: number;
+  maxStrength: number;
+  morale: number;
+  training: number;
+  /** Tile the company is ordered to hold, or -1 to stay at the fort. */
+  orderTile: number;
+  x: number;
+  y: number;
+}
+
+export interface Building {
+  id: number;
+  defId: string;
+  x: number;
+  y: number;
+  size: number;
+  /** Construction progress 0..1; below 1 the building is a site. */
+  built: number;
+  /** Workers currently assigned. */
+  workers: number;
+  /** 0..1 — how much of the desired workforce is present. */
+  staffing: number;
+  /** Ticks accumulated toward the current production cycle. */
+  progress: number;
+  store: Partial<Record<GoodId, number>>;
+  fire: number;
+  damage: number;
+  walkerCooldown: number;
+  /** Live walker ids spawned by this building. */
+  walkers: number[];
+  hasRoad: boolean;
+  /** Set false while the player has mothballed the building. */
+  enabled: boolean;
+  house?: HouseState;
+  monument?: MonumentState;
+  garrison?: GarrisonState;
+  /** Storage yard / granary per-good policy. */
+  orders?: Partial<Record<GoodId, 'accept' | 'refuse'>>;
+  /** Cosmetic seed so identical buildings do not look identical. */
+  variant: number;
+  /** Ticks the building has been standing, for gentle art variation. */
+  age: number;
+}
+
+export interface CityMessage {
+  id: number;
+  tick: number;
+  title: string;
+  body: string;
+  kind: 'info' | 'warn' | 'bad' | 'good' | 'request';
+  /** Tile to jump the camera to, if relevant. */
+  tile?: number;
+  read: boolean;
+}
+
+export interface TradeRoute {
+  city: string;
+  kind: 'land' | 'sea';
+  open: boolean;
+  cost: number;
+  /** Goods this city will sell you, with an annual quota. */
+  sells: Partial<Record<GoodId, number>>;
+  /** Goods this city will buy from you, with an annual quota. */
+  buys: Partial<Record<GoodId, number>>;
+  /** Remaining quota this year. */
+  soldThisYear: Partial<Record<GoodId, number>>;
+  boughtThisYear: Partial<Record<GoodId, number>>;
+}
+
+export interface PharaohRequest {
+  id: number;
+  good: GoodId | 'troops' | 'deben';
+  amount: number;
+  dueTick: number;
+  delivered: number;
+  /** Kingdom rating change on success / failure. */
+  reward: number;
+  penalty: number;
+  resolved: 'pending' | 'met' | 'failed';
+}
+
+export interface Invasion {
+  id: number;
+  enemy: string;
+  strength: number;
+  arrivalTick: number;
+  warned: boolean;
+  landed: boolean;
+  /** Edge tile the enemy enters from. */
+  entryTile: number;
+}
+
+export type LaborPriority = LaborSector[];
+
+export const DEFAULT_LABOR_PRIORITY: LaborPriority = [
+  'food', 'distribution', 'industry', 'infrastructure', 'health', 'religion',
+  'education', 'culture', 'government', 'monument', 'military', 'trade',
+];
+
+export interface Ratings {
+  culture: number;
+  prosperity: number;
+  monument: number;
+  kingdom: number;
+}
+
+export class City {
+  world: World;
+  rng: RNG;
+  walkers: WalkerSystem;
+
+  buildings: (Building | null)[] = [];
+  private freeBuildingIds: number[] = [];
+  /** Buildings that need a per-month visit, kept as a dense list for iteration. */
+  liveBuildings: number[] = [];
+
+  tick = 0;
+  funds = 2000;
+  /** Player's personal savings, drawn from salary. */
+  savings = 0;
+  salary = 60;
+  taxRate = 0.08;
+
+  population = 0;
+  workforce = 0;
+  employed = 0;
+  unemployment = 0;
+  laborPriority: LaborPriority = [...DEFAULT_LABOR_PRIORITY];
+
+  /** God mood, -100..100. */
+  godMood: Record<GodId, number> = { osiris: 20, ra: 20, ptah: 20, seth: 20, bast: 20 };
+  /** Months since each god's last festival. */
+  godFestival: Record<GodId, number> = { osiris: 0, ra: 0, ptah: 0, seth: 0, bast: 0 };
+
+  ratings: Ratings = { culture: 0, prosperity: 0, monument: 0, kingdom: 50 };
+
+  /** Flood cycle state. */
+  floodLevel = 0;
+  floodQuality = 0.6;
+  nextFloodQuality = 0.6;
+
+  messages: CityMessage[] = [];
+  private nextMessageId = 1;
+
+  trade: TradeRoute[] = [];
+  requests: PharaohRequest[] = [];
+  private nextRequestId = 1;
+  invasions: Invasion[] = [];
+  private nextInvasionId = 1;
+
+  /** Entry point road tile where immigrants and caravans appear. */
+  entryTile = -1;
+  exitTile = -1;
+
+  /** Aggregate counters refreshed each month, for advisors and the HUD. */
+  stats = {
+    housed: 0,
+    capacity: 0,
+    foodStored: 0,
+    foodProducedPerMonth: 0,
+    foodConsumedPerMonth: 0,
+    unemployed: 0,
+    workersNeeded: 0,
+    avgHealth: 100,
+    crime: 0,
+    fireRisk: 0,
+    damageRisk: 0,
+    literacy: 0,
+    monthlyIncome: 0,
+    monthlyExpense: 0,
+    immigrationRate: 0,
+  };
+
+  private desirabilityDirty = true;
+  private monthAccumulator = 0;
+  private dayAccumulator = 0;
+
+  /** Cache of building ids by def, for cheap "do I have one of these" checks. */
+  private countsByDef = new Map<string, number>();
+
+  constructor(world: World, seed = 1) {
+    this.world = world;
+    this.rng = new RNG(seed);
+    this.walkers = new WalkerSystem(this);
+    this.findEntryPoints();
+  }
+
+  // -------------------------------------------------------------------------
+  // Time
+  // -------------------------------------------------------------------------
+
+  get year(): number {
+    return Math.floor(this.tick / TICKS_PER_YEAR);
+  }
+  get month(): number {
+    return Math.floor((this.tick % TICKS_PER_YEAR) / TICKS_PER_MONTH);
+  }
+  get monthName(): string {
+    return MONTHS[this.month];
+  }
+  get season(): Season {
+    return seasonOfMonth(this.month);
+  }
+  /** 0..1 progress through the current month. */
+  get monthFraction(): number {
+    return (this.tick % TICKS_PER_MONTH) / TICKS_PER_MONTH;
+  }
+
+  // -------------------------------------------------------------------------
+  // Building lifecycle
+  // -------------------------------------------------------------------------
+
+  def(b: Building): BuildingDef {
+    return BUILDING_BY_ID[b.defId];
+  }
+
+  countOf(defId: string): number {
+    return this.countsByDef.get(defId) ?? 0;
+  }
+
+  /** Place a building. Returns the new id, or -1 if it could not be placed. */
+  place(defId: string, x: number, y: number, free = false): number {
+    const def = BUILDING_BY_ID[defId];
+    if (!def) return -1;
+
+    if (defId === 'road' || defId === 'plaza') return this.placeRoad(x, y, defId, free);
+
+    const allowRock = def.terrain === 'rock';
+    if (!this.world.canPlace(x, y, def.size, def.terrain, allowRock)) return -1;
+    if (!free && this.funds < def.cost) return -1;
+    if (!free) this.funds -= def.cost;
+
+    const id = this.allocBuilding();
+    const b: Building = {
+      id, defId, x, y, size: def.size,
+      built: def.cat === 'monument' ? 0 : 1,
+      workers: 0, staffing: 0, progress: 0, store: {},
+      fire: 0, damage: 0, walkerCooldown: this.rng.int(def.walkerInterval ?? 120),
+      walkers: [], hasRoad: false, enabled: true,
+      variant: this.rng.int(1000), age: 0,
+    };
+
+    if (def.cat === 'housing') {
+      b.house = {
+        level: 0, people: 0, foods: {}, goods: {}, services: {},
+        health: 100, hunger: 0, taxFresh: 0, crime: 0, blocker: 'Waiting for settlers',
+      };
+    }
+    if (def.monument) {
+      b.monument = { stage: 0, laborDone: 0, delivered: {}, complete: false };
+      b.built = 0;
+    }
+    if (def.garrison) {
+      b.garrison = {
+        strength: 0, maxStrength: def.garrison, morale: 100, training: 0,
+        orderTile: -1, x: x + def.size / 2, y: y + def.size / 2,
+      };
+    }
+    if (def.storage) {
+      b.orders = {};
+    }
+
+    this.buildings[id] = b;
+    this.liveBuildings.push(id);
+    this.countsByDef.set(defId, this.countOf(defId) + 1);
+
+    for (let dy = 0; dy < def.size; dy++) {
+      for (let dx = 0; dx < def.size; dx++) {
+        this.world.building[this.world.idx(x + dx, y + dy)] = id;
+      }
+    }
+    this.desirabilityDirty = true;
+    this.refreshRoadAccess(b);
+    return id;
+  }
+
+  private placeRoad(x: number, y: number, defId: string, free: boolean): number {
+    const w = this.world;
+    if (!w.inBounds(x, y)) return -1;
+    const i = w.idx(x, y);
+    if (w.terrain[i] === Terrain.Water || w.terrain[i] === Terrain.Rock) return -1;
+    if (w.building[i] !== -1) return -1;
+    const def = BUILDING_BY_ID[defId];
+    const already = w.road[i] === 1;
+    // Upgrading dirt to plaza is allowed and costs the difference.
+    if (already && defId === 'road') return -1;
+    const cost = def.cost;
+    if (!free && this.funds < cost) return -1;
+    if (!free) this.funds -= cost;
+    w.road[i] = 1;
+    // Plazas are recorded as a building so their desirability is tracked, but they
+    // remain walkable road tiles.
+    if (defId === 'plaza') {
+      const id = this.allocBuilding();
+      this.buildings[id] = {
+        id, defId, x, y, size: 1, built: 1, workers: 0, staffing: 1, progress: 0,
+        store: {}, fire: 0, damage: 0, walkerCooldown: 0, walkers: [], hasRoad: true,
+        enabled: true, variant: this.rng.int(1000), age: 0,
+      };
+      this.liveBuildings.push(id);
+      this.countsByDef.set(defId, this.countOf(defId) + 1);
+      this.desirabilityDirty = true;
+      return id;
+    }
+    this.desirabilityDirty = true;
+    this.markRoadNeighboursDirty(x, y);
+    return -2; // roads have no building id
+  }
+
+  private markRoadNeighboursDirty(x: number, y: number): void {
+    // Buildings within a couple of tiles may have just gained road access.
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const px = x + dx;
+        const py = y + dy;
+        if (!this.world.inBounds(px, py)) continue;
+        const id = this.world.building[this.world.idx(px, py)];
+        if (id >= 0 && this.buildings[id]) this.refreshRoadAccess(this.buildings[id]!);
+      }
+    }
+  }
+
+  private allocBuilding(): number {
+    const reused = this.freeBuildingIds.pop();
+    if (reused !== undefined) return reused;
+    this.buildings.push(null);
+    return this.buildings.length - 1;
+  }
+
+  refreshRoadAccess(b: Building): void {
+    b.hasRoad = this.world.touchesRoad(b.x, b.y, b.size);
+  }
+
+  /** Demolish whatever occupies (x,y): a building, or a road tile. */
+  demolish(x: number, y: number, refund = false): boolean {
+    const w = this.world;
+    if (!w.inBounds(x, y)) return false;
+    const i = w.idx(x, y);
+    const id = w.building[i];
+    if (id >= 0) {
+      const b = this.buildings[id];
+      if (!b) return false;
+      const def = this.def(b);
+      // Plaza tiles double as roads.
+      if (def.id === 'plaza') w.road[i] = 0;
+      for (let dy = 0; dy < b.size; dy++) {
+        for (let dx = 0; dx < b.size; dx++) {
+          const j = w.idx(b.x + dx, b.y + dy);
+          if (w.building[j] === id) w.building[j] = -1;
+        }
+      }
+      for (const wid of b.walkers) this.walkers.kill(wid);
+      if (b.house) this.population -= b.house.people;
+      this.buildings[id] = null;
+      this.freeBuildingIds.push(id);
+      const li = this.liveBuildings.indexOf(id);
+      if (li >= 0) this.liveBuildings.splice(li, 1);
+      this.countsByDef.set(def.id, Math.max(0, this.countOf(def.id) - 1));
+      if (refund) this.funds += Math.floor(def.cost * 0.25);
+      else this.funds -= Math.max(1, Math.floor(def.cost * 0.02));
+      this.desirabilityDirty = true;
+      return true;
+    }
+    if (w.road[i]) {
+      w.road[i] = 0;
+      this.funds -= 1;
+      this.desirabilityDirty = true;
+      this.markRoadNeighboursDirty(x, y);
+      return true;
+    }
+    return false;
+  }
+
+  buildingAt(x: number, y: number): Building | null {
+    if (!this.world.inBounds(x, y)) return null;
+    const id = this.world.building[this.world.idx(x, y)];
+    return id >= 0 ? this.buildings[id] : null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Main tick
+  // -------------------------------------------------------------------------
+
+  step(): void {
+    this.tick++;
+    this.walkers.step();
+
+    // Production and walker despatch run every tick so the city feels continuously busy.
+    for (let k = 0; k < this.liveBuildings.length; k++) {
+      const b = this.buildings[this.liveBuildings[k]];
+      if (b) this.stepBuilding(b);
+    }
+
+    if (++this.dayAccumulator >= 30) {
+      this.dayAccumulator = 0;
+      this.stepDay();
+    }
+    if (++this.monthAccumulator >= TICKS_PER_MONTH) {
+      this.monthAccumulator = 0;
+      this.stepMonth();
+    }
+    this.stepFlood();
+  }
+
+  private stepBuilding(b: Building): void {
+    const def = this.def(b);
+    b.age++;
+
+    if (b.monument && !b.monument.complete) {
+      // Monument progress is driven by guild deliveries, handled in systems.ts.
+      return;
+    }
+
+    if (!b.enabled || !b.built) return;
+
+    // A building with no road link cannot despatch anyone or receive deliveries.
+    const operational = b.staffing > 0 || def.workers === 0;
+
+    // Production.
+    if (def.produces && operational) {
+      const rate = this.productionRate(b, def);
+      if (rate > 0) {
+        b.progress += rate;
+        const need = def.cycleTicks ?? 600;
+        if (b.progress >= need) {
+          if (this.consumeInputs(b, def)) {
+            b.progress -= need;
+            const qty = def.produceQty ?? 1;
+            b.store[def.produces] = (b.store[def.produces] ?? 0) + qty;
+          } else {
+            b.progress = need; // stall at full, waiting for materials
+          }
+        }
+      }
+    }
+
+    // Libraries consume papyrus without producing anything.
+    if (!def.produces && def.consumes && def.cycleTicks && operational) {
+      b.progress += b.staffing;
+      if (b.progress >= def.cycleTicks) {
+        b.progress = 0;
+        this.consumeInputs(b, def);
+      }
+    }
+
+    // Walker despatch.
+    if (def.walkerInterval && b.hasRoad && operational) {
+      if (b.walkerCooldown > 0) b.walkerCooldown--;
+      else if (b.walkers.length < this.maxWalkersFor(def)) {
+        if (this.walkers.spawnFrom(b, def)) {
+          b.walkerCooldown = Math.max(30, Math.round((def.walkerInterval ?? 240) / Math.max(0.35, b.staffing)));
+        } else {
+          b.walkerCooldown = 60;
+        }
+      }
+    }
+
+    // Producers push finished goods out to storage via cart pushers.
+    if (def.produces && b.hasRoad) {
+      const have = b.store[def.produces] ?? 0;
+      const batch = Math.max(4, Math.floor((def.produceQty ?? 8) / 2));
+      if (have >= batch && b.walkers.length < 3) {
+        if (this.walkers.spawnCart(b, def.produces, Math.min(have, batch * 2))) {
+          b.store[def.produces] = have - Math.min(have, batch * 2);
+        }
+      }
+    }
+
+    // Bazaars fetch stock when low.
+    if (def.id === 'bazaar' && b.hasRoad && operational) {
+      const total = Object.values(b.store).reduce((a: number, v) => a + (v ?? 0), 0);
+      if (total < 60 && b.walkers.length < 4) this.walkers.spawnBuyer(b);
+    }
+  }
+
+  private maxWalkersFor(def: BuildingDef): number {
+    if (def.id === 'bazaar') return 5;
+    if (def.cat === 'religion') return 3;
+    return 2;
+  }
+
+  /** Ticks of progress this building earns this tick. */
+  private productionRate(b: Building, def: BuildingDef): number {
+    let rate = b.staffing;
+    if (def.cat === 'food' && def.terrain === 'floodplain') {
+      // Farms follow the Nile. Nothing grows while the fields are under water.
+      const i = this.world.idx(b.x + (b.size >> 1), b.y + (b.size >> 1));
+      if (this.world.flooded[i]) return 0;
+      const season = this.season;
+      const seasonMul = season === 'akhet' ? 0.15 : season === 'peret' ? 1.0 : 1.45;
+      const fert = this.averageFertility(b);
+      rate *= seasonMul * (0.45 + (fert / 100) * 1.05);
+    }
+    // Damage and fire slow a building down before they destroy it.
+    rate *= 1 - clamp(b.damage / 200, 0, 0.5);
+    return rate;
+  }
+
+  private averageFertility(b: Building): number {
+    let sum = 0;
+    let n = 0;
+    for (let dy = 0; dy < b.size; dy++) {
+      for (let dx = 0; dx < b.size; dx++) {
+        const i = this.world.idx(b.x + dx, b.y + dy);
+        sum += this.world.fertility[i];
+        n++;
+      }
+    }
+    return n ? sum / n : 0;
+  }
+
+  private consumeInputs(b: Building, def: BuildingDef): boolean {
+    if (!def.consumes) return true;
+    for (const [g, qty] of Object.entries(def.consumes)) {
+      if ((b.store[g as GoodId] ?? 0) < (qty as number)) return false;
+    }
+    for (const [g, qty] of Object.entries(def.consumes)) {
+      b.store[g as GoodId] = (b.store[g as GoodId] ?? 0) - (qty as number);
+    }
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Daily pass
+  // -------------------------------------------------------------------------
+
+  private stepDay(): void {
+    if (this.desirabilityDirty) {
+      this.recomputeDesirability();
+      this.desirabilityDirty = false;
+    }
+    this.applyDirectServices();
+    this.decayServices();
+    this.accumulateRisk();
+    this.farmDrawdown();
+  }
+
+  /**
+   * Some buildings serve a radius rather than a route. A well is the obvious case:
+   * nobody carries the water, the neighbours simply come and draw it.
+   */
+  private applyDirectServices(): void {
+    const w = this.world;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b || !b.built || !b.enabled) continue;
+      const def = this.def(b);
+      if (!def.directRange || !def.service) continue;
+      if (def.workers > 0 && b.staffing <= 0) continue;
+      const r = def.directRange;
+      for (let dy = -r; dy < r + b.size; dy++) {
+        for (let dx = -r; dx < r + b.size; dx++) {
+          const px = b.x + dx;
+          const py = b.y + dy;
+          if (!w.inBounds(px, py)) continue;
+          const nid = w.building[w.idx(px, py)];
+          if (nid < 0) continue;
+          const nb = this.buildings[nid];
+          if (!nb?.house) continue;
+          nb.house.services[def.service] = SVC_TICKS;
+        }
+      }
+    }
+  }
+
+  /** Service freshness ticks down; a house whose priest stops calling slides back. */
+  private decayServices(): void {
+    const dec = 30;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b?.house) continue;
+      const s = b.house.services;
+      for (const k of Object.keys(s) as ServiceId[]) {
+        const v = (s[k] ?? 0) - dec;
+        if (v <= 0) delete s[k];
+        else s[k] = v;
+      }
+      b.house.taxFresh = Math.max(0, b.house.taxFresh - dec);
+    }
+  }
+
+  private accumulateRisk(): void {
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b || !b.built) continue;
+      const def = this.def(b);
+      const fireBase = def.fireRisk ?? (b.house ? 0.3 + b.house.level * 0.02 : 0.15);
+      const dmgBase = def.damageRisk ?? (b.house ? 0.25 : 0.2);
+      // Ra's displeasure makes the city burn.
+      const raMul = this.godMood.ra < -40 ? 2.2 : 1;
+      b.fire = clamp(b.fire + fireBase * raMul * 0.55, 0, 120);
+      b.damage = clamp(b.damage + dmgBase * 0.5, 0, 120);
+    }
+  }
+
+  /** Growing crops draw fertility out of the soil; only the flood puts it back. */
+  private farmDrawdown(): void {
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b) continue;
+      const def = this.def(b);
+      if (def.cat !== 'food' || def.terrain !== 'floodplain') continue;
+      if (b.staffing <= 0) continue;
+      for (let dy = 0; dy < b.size; dy++) {
+        for (let dx = 0; dx < b.size; dx++) {
+          const i = this.world.idx(b.x + dx, b.y + dy);
+          if (this.world.flooded[i]) continue;
+          this.world.fertility[i] = Math.max(0, this.world.fertility[i] - 0.45);
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Monthly pass
+  // -------------------------------------------------------------------------
+
+  private stepMonth(): void {
+    this.allocateLabor();
+    this.consumeHousehold();
+    this.evolveHousing();
+    this.collectTaxes();
+    this.payWages();
+    this.updateImmigration();
+    this.updateHealth();
+    this.updateStats();
+    this.checkLogistics();
+  }
+
+  private lastLogisticsWarning = -99999;
+
+  /**
+   * A workshop whose goods cannot reach a store just fills up and stops, with nothing
+   * on screen to explain it. Nine times out of ten the cause is a road network split in
+   * two — which is invisible unless somebody says so.
+   */
+  private checkLogistics(): void {
+    if (this.tick - this.lastLogisticsWarning < TICKS_PER_YEAR) return;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b || !b.built || !b.enabled) continue;
+      const def = this.def(b);
+      if (!def.produces) continue;
+      const have = b.store[def.produces] ?? 0;
+      if (have < (def.produceQty ?? 8)) continue;
+
+      let why = '';
+      if (!b.hasRoad) {
+        why = 'it has no road access at all';
+      } else if (!this.walkers.canReachStorage(b, def.produces)) {
+        const kind = GOODS[def.produces].kind === 'food' ? 'granary' : 'storage yard';
+        why = `no ${kind} can be reached from it by road — check that your roads actually join up`;
+      }
+      if (!why) continue;
+
+      this.lastLogisticsWarning = this.tick;
+      this.pushMessage(
+        `${def.name} cannot deliver`,
+        `Your ${def.name.toLowerCase()} is full of ${GOODS[def.produces].name.toLowerCase()} and ` +
+        `production has stopped because ${why}.`,
+        'warn',
+        this.world.idx(b.x, b.y),
+      );
+      return;
+    }
+  }
+
+  /**
+   * Workers are drawn from the housed population and handed to buildings in the
+   * player's chosen sector order. Within a sector, buildings are served in placement
+   * order, so an under-supplied city starves its newest workshops first — which is
+   * exactly the pressure that makes labour priority a real decision.
+   */
+  private allocateLabor(): void {
+    this.workforce = Math.floor(this.population * 0.42);
+    let pool = this.workforce;
+    let needed = 0;
+
+    const bySector = new Map<LaborSector, Building[]>();
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b) continue;
+      const def = this.def(b);
+      if (!def.workers || !def.sector) {
+        b.workers = 0;
+        b.staffing = def.workers ? 0 : 1;
+        continue;
+      }
+      if (!b.enabled || !b.built || !b.hasRoad) {
+        b.workers = 0;
+        b.staffing = 0;
+        continue;
+      }
+      needed += def.workers;
+      let arr = bySector.get(def.sector);
+      if (!arr) bySector.set(def.sector, (arr = []));
+      arr.push(b);
+    }
+
+    const order = [
+      ...this.laborPriority,
+      ...[...bySector.keys()].filter((k) => !this.laborPriority.includes(k)),
+    ];
+    for (const sector of order) {
+      const arr = bySector.get(sector);
+      if (!arr) continue;
+      let want = 0;
+      for (const b of arr) want += this.def(b).workers;
+      if (want <= 0) continue;
+
+      if (want <= pool) {
+        for (const b of arr) {
+          const def = this.def(b);
+          b.workers = def.workers;
+          b.staffing = 1;
+        }
+        pool -= want;
+      } else {
+        // The sector is short. Every building in it runs at the same reduced
+        // efficiency rather than the first few running fully while the rest stand
+        // idle — a half-staffed district is recoverable, a dead one is not.
+        const ratio = pool / want;
+        for (const b of arr) {
+          const def = this.def(b);
+          const give = Math.floor(def.workers * ratio);
+          b.workers = give;
+          b.staffing = def.workers ? give / def.workers : 1;
+        }
+        pool = 0;
+      }
+    }
+
+    this.employed = this.workforce - pool;
+    this.stats.workersNeeded = needed;
+    this.stats.unemployed = pool;
+    this.unemployment = this.workforce > 0 ? pool / this.workforce : 0;
+
+    // A silent labour shortage is the single most confusing failure in this genre:
+    // buildings simply stop, with nothing on screen to say why. Say it out loud.
+    if (needed > this.workforce * 1.15 && this.workforce > 0) {
+      if (this.tick - this.lastLaborWarning > TICKS_PER_YEAR) {
+        this.lastLaborWarning = this.tick;
+        this.pushMessage(
+          'Labour shortage',
+          `Your city has ${this.workforce} workers but ${needed} jobs. Buildings low in your ` +
+          `labour priority are standing half-staffed or empty. Either house more people, ` +
+          `mothball what you do not need, or reorder your priorities in the Labour advisor.`,
+          'warn',
+        );
+      }
+    }
+  }
+
+  private lastLaborWarning = -99999;
+
+  /** Houses eat, wear out pottery and drink beer. */
+  private consumeHousehold(): void {
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b?.house) continue;
+      const h = b.house;
+      if (h.people <= 0) continue;
+
+      const foodNeed = h.people * 0.30;
+      let remaining = foodNeed;
+      // Eat evenly across available types so variety is preserved as long as possible.
+      const avail = FOOD_IDS.filter((f) => (h.foods[f] ?? 0) > 0.01);
+      if (avail.length) {
+        const per = remaining / avail.length;
+        for (const f of avail) {
+          const take = Math.min(h.foods[f]!, per);
+          h.foods[f] = h.foods[f]! - take;
+          remaining -= take;
+          if (h.foods[f]! < 0.01) delete h.foods[f];
+        }
+      }
+      // Going short of food is survivable for a while. A household draws on what it
+      // has, complains, and only starts to break up after several hungry months —
+      // without that grace period a brand-new settlement can never get started, since
+      // the first families have to arrive before anyone can work the fields.
+      if (remaining > 0.01) {
+        h.hunger++;
+        h.health = clamp(h.health - 5, 0, 100);
+        if (h.hunger > 3) {
+          const severity = clamp(remaining / Math.max(1, foodNeed), 0, 1);
+          const leaving = Math.max(1, Math.round(h.people * 0.18 * severity));
+          const actual = Math.min(h.people, leaving);
+          h.people -= actual;
+          this.population -= actual;
+        }
+      } else {
+        h.hunger = 0;
+      }
+
+      const goodsCount = HOUSING[h.level].goods;
+      for (let gi = 0; gi < goodsCount; gi++) {
+        const g = HOUSEHOLD_GOODS[gi];
+        const need = h.people * 0.045;
+        const have = h.goods[g] ?? 0;
+        h.goods[g] = Math.max(0, have - need);
+        if (h.goods[g]! < 0.01) delete h.goods[g];
+      }
+    }
+  }
+
+  /**
+   * Evolve or devolve every house by one step. A house rises only when it meets every
+   * requirement of the next level; it falls the moment it fails its current one.
+   */
+  private evolveHousing(): void {
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b?.house) continue;
+      const h = b.house;
+      const des = this.world.desirability[this.world.idx(b.x, b.y)];
+
+      // An unoccupied lot with any desirability at all attracts a first hut.
+      if (h.level === 0) {
+        h.blocker = h.people > 0 ? 'Settling' : 'Waiting for settlers';
+        if (h.people > 0) h.level = 1;
+        continue;
+      }
+
+      const cur = HOUSING[h.level];
+      const curFail = this.housingFailure(b, h, cur, des);
+      if (curFail) {
+        h.level = Math.max(1, h.level - 1);
+        h.blocker = curFail;
+        const cap = HOUSING[h.level].capacity;
+        if (h.people > cap) {
+          const evicted = h.people - cap;
+          h.people = cap;
+          this.population -= evicted;
+        }
+        continue;
+      }
+
+      if (h.level >= HOUSING.length - 1) {
+        h.blocker = 'At the highest level';
+        continue;
+      }
+      const next = HOUSING[h.level + 1];
+      const nextFail = this.housingFailure(b, h, next, des);
+      if (!nextFail) {
+        h.level++;
+        h.blocker = '';
+      } else {
+        h.blocker = nextFail;
+      }
+    }
+  }
+
+  /** Returns a human-readable reason the house fails `lvl`, or '' if it meets it. */
+  private housingFailure(b: Building, h: HouseState, lvl: typeof HOUSING[number], des: number): string {
+    if (des < lvl.desirability) return `Desirability ${des} — needs ${lvl.desirability}`;
+    if (des > lvl.desirabilityMax) return `Too desirable for ${lvl.name.toLowerCase()}`;
+    if (lvl.water === 1 && !h.services.wellWater && !h.services.water) return 'No access to water';
+    if (lvl.water === 2 && !h.services.water) return 'Needs a water supply, not just a well';
+
+    const foodTypes = FOOD_IDS.filter((f) => (h.foods[f] ?? 0) > 0.05).length;
+    if (foodTypes < lvl.foodTypes) return `Needs ${lvl.foodTypes} food type${lvl.foodTypes > 1 ? 's' : ''}, has ${foodTypes}`;
+
+    const gods = GOD_IDS.filter((g) => h.services[RELIGION_SERVICE[g]]).length;
+    if (gods < lvl.gods) return `Needs ${lvl.gods} god${lvl.gods > 1 ? 's' : ''}, has ${gods}`;
+
+    for (let i = 0; i < lvl.goods; i++) {
+      const g = HOUSEHOLD_GOODS[i];
+      if ((h.goods[g] ?? 0) <= 0.05) return `Needs ${GOODS[g].name.toLowerCase()}`;
+    }
+
+    if (lvl.education >= 1 && !h.services.school && !h.services.library) return 'Needs a scribal school';
+    if (lvl.education === 2 && !h.services.library && !h.services.school) return 'Needs education';
+    if (lvl.education === 2 && !(h.services.school || h.services.library)) return 'Needs education';
+    if (lvl.education === 3 && !(h.services.school && h.services.library)) return 'Needs both school and library';
+
+    const ent: ServiceId[] = ['booth', 'bandstand', 'pavilion', 'senet'];
+    for (let i = 0; i < lvl.entertainment; i++) {
+      if (!h.services[ent[i]]) {
+        const names = ['a booth', 'a bandstand', 'a pavilion', 'a senet house'];
+        return `Needs ${names[i]}`;
+      }
+    }
+
+    const health: ServiceId[] = ['apothecary', 'physician', 'dentist', 'mortuary'];
+    for (let i = 0; i < lvl.health; i++) {
+      if (!h.services[health[i]]) {
+        const names = ['an apothecary', 'a physician', 'a dentist', 'a mortuary'];
+        return `Needs ${names[i]}`;
+      }
+    }
+    return '';
+  }
+
+  private collectTaxes(): void {
+    let income = 0;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b?.house) continue;
+      const h = b.house;
+      if (h.taxFresh <= 0) continue;
+      income += h.people * HOUSING[h.level].taxPerPerson * (this.taxRate / 0.08);
+    }
+    income = Math.round(income);
+    this.funds += income;
+    this.stats.monthlyIncome = income;
+    this.savings += Math.round(this.salary / 12);
+  }
+
+  private payWages(): void {
+    let expense = 0;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b || !b.built) continue;
+      const def = this.def(b);
+      expense += def.upkeep;
+    }
+    // Wages scale with the number of people actually working.
+    expense += Math.round(this.employed * 0.10);
+    this.funds -= expense;
+    this.stats.monthlyExpense = expense;
+
+    if (this.funds < -500) {
+      this.pushMessage('The treasury is empty', 'Your city is deep in debt. Pharaoh is displeased, and your officials are unpaid.', 'bad');
+      this.ratings.kingdom = clamp(this.ratings.kingdom - 2, 0, 100);
+    }
+  }
+
+  /**
+   * Immigration is a pull, not a push: people come when there is somewhere to live,
+   * food to eat, and work to do. High taxes and unemployment turn the flow around.
+   */
+  private updateImmigration(): void {
+    let capacity = 0;
+    let housed = 0;
+    let bestLots: Building[] = [];
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b?.house) continue;
+      const cap = HOUSING[b.house.level].capacity || HOUSING[1].capacity;
+      capacity += cap;
+      housed += b.house.people;
+      if (b.house.people < cap && b.hasRoad) bestLots.push(b);
+    }
+    this.stats.capacity = capacity;
+    this.stats.housed = housed;
+
+    const room = capacity - housed;
+    const foodMonths = this.foodMonthsRemaining();
+    let attractiveness = 0;
+    attractiveness += clamp(room / 40, 0, 3);
+
+    if (housed < 60) {
+      // The first families come for the land, not for a full granary. Judging a
+      // brand-new settlement on its food stores would deadlock it permanently.
+      attractiveness += 1.0;
+    } else {
+      // A city that is visibly running out of food should stop attracting people
+      // outright, not merely slow down — otherwise it grows straight through the
+      // inundation into a famine it created itself.
+      attractiveness += foodMonths > 1.5 ? 1.2 : foodMonths > 0.6 ? -0.5 : -4.0;
+    }
+
+    attractiveness -= this.unemployment > 0.18 ? 2.0 : 0;
+    attractiveness += this.stats.workersNeeded > this.workforce ? 1.0 : 0;
+    attractiveness -= (this.taxRate - 0.08) * 22;
+    attractiveness += (this.ratings.prosperity - 30) / 60;
+
+    this.stats.immigrationRate = attractiveness;
+
+    if (attractiveness > 0.4 && bestLots.length && this.entryTile >= 0) {
+      // Settlers move in next door to other settlers, and choose the pleasant end of
+      // town. Picking uniformly at random across every empty lot spreads a small
+      // population so thinly across a large plan that no bazaar or priest can ever
+      // reach enough of them — a thin sprawl instead of a district.
+      const w = this.world;
+      bestLots.sort((a, b) => {
+        const ao = a.house!.people > 0 ? 1 : 0;
+        const bo = b.house!.people > 0 ? 1 : 0;
+        if (ao !== bo) return bo - ao;
+        return w.desirability[w.idx(b.x, b.y)] - w.desirability[w.idx(a.x, a.y)];
+      });
+      const frontier = bestLots.slice(0, Math.max(6, Math.ceil(bestLots.length * 0.12)));
+      const wave = clamp(Math.round(attractiveness * 1.6), 1, 8);
+      for (let i = 0; i < wave; i++) {
+        this.walkers.spawnImmigrant(this.rng.pick(frontier));
+      }
+    } else if (attractiveness < -1.2 && housed > 0) {
+      // People drift away. Emigration is deliberately slower than immigration.
+      const leaving = clamp(Math.round(-attractiveness), 1, 5);
+      for (let i = 0; i < leaving; i++) {
+        const occupied = bestLots.length ? bestLots : [];
+        const src = occupied.length ? this.rng.pick(occupied) : null;
+        if (src?.house && src.house.people > 0) {
+          const n = Math.min(src.house.people, 4);
+          src.house.people -= n;
+          this.population -= n;
+          this.walkers.spawnEmigrant(src, n);
+        }
+      }
+    }
+  }
+
+  foodMonthsRemaining(): number {
+    let food = 0;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b) continue;
+      const def = this.def(b);
+      if (def.id === 'granary' || def.id === 'bazaar') {
+        for (const f of FOOD_IDS) food += b.store[f] ?? 0;
+      }
+      if (b.house) for (const f of FOOD_IDS) food += b.house.foods[f] ?? 0;
+    }
+    this.stats.foodStored = Math.round(food);
+    const need = Math.max(1, this.population * 0.30);
+    return food / need;
+  }
+
+  private updateHealth(): void {
+    let total = 0;
+    let n = 0;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b?.house || b.house.people <= 0) continue;
+      const h = b.house;
+      let target = 60;
+      if (h.services.apothecary) target += 12;
+      if (h.services.physician) target += 16;
+      if (h.services.dentist) target += 6;
+      if (h.services.mortuary) target += 6;
+      if (h.services.water) target += 10;
+      else if (h.services.wellWater) target += 4;
+      else target -= 20;
+      const foodTypes = FOOD_IDS.filter((f) => (h.foods[f] ?? 0) > 0.05).length;
+      target += foodTypes * 5;
+      if (this.godMood.bast > 50) target += 10;
+      if (this.godMood.bast < -40) target -= 25;
+      // Marshes breed fever.
+      const i = this.world.idx(b.x, b.y);
+      if (this.nearTerrain(b.x, b.y, Terrain.Marsh, 4)) target -= 14;
+      h.health = approach(h.health, clamp(target, 0, 100), 6);
+      total += h.health;
+      n++;
+    }
+    this.stats.avgHealth = n ? Math.round(total / n) : 100;
+  }
+
+  private nearTerrain(x: number, y: number, t: Terrain, r: number): boolean {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const px = x + dx;
+        const py = y + dy;
+        if (!this.world.inBounds(px, py)) continue;
+        if (this.world.terrain[this.world.idx(px, py)] === t) return true;
+      }
+    }
+    return false;
+  }
+
+  private updateStats(): void {
+    let pop = 0;
+    let literate = 0;
+    let crime = 0;
+    let fire = 0;
+    let dmg = 0;
+    let houses = 0;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b) continue;
+      if (b.house) {
+        pop += b.house.people;
+        houses++;
+        if (b.house.services.school || b.house.services.library) literate += b.house.people;
+        crime += b.house.crime;
+      }
+      fire = Math.max(fire, b.fire);
+      dmg = Math.max(dmg, b.damage);
+    }
+    this.population = pop;
+    this.stats.literacy = pop ? Math.round((literate / pop) * 100) : 0;
+    this.stats.crime = houses ? crime / houses : 0;
+    this.stats.fireRisk = fire;
+    this.stats.damageRisk = dmg;
+  }
+
+  // -------------------------------------------------------------------------
+  // Desirability
+  // -------------------------------------------------------------------------
+
+  /**
+   * Full recompute. Each emitter writes a falling-off value into a square around it;
+   * houses then read the value under their own tile. Recomputed at most once a "day",
+   * and only when something has actually been built or destroyed.
+   */
+  recomputeDesirability(): void {
+    const w = this.world;
+    w.desirability.fill(0);
+
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b) continue;
+      const def = this.def(b);
+      let emit = def.desirability;
+      if (b.house) {
+        // Houses themselves radiate: a slum drags a district down, an estate lifts it.
+        const lv = b.house.level;
+        // Density alone should not be crippling: a tightly packed quarter of cottages
+        // is normal and workable, but it will not become a manor district without
+        // gardens, plazas and statues to lift it.
+        const value = lv <= 5 ? -1 : lv <= 9 ? 1 : lv <= 13 ? 3 : 6;
+        // Low housing drags only its immediate neighbours down; a fine house is
+        // admired from further away.
+        emit = { value, range: lv <= 5 ? 2 : 3, step: 1 };
+      }
+      if (!emit) continue;
+      // Unbuilt monuments are building sites: unpleasant until finished.
+      const scale = b.monument && !b.monument.complete ? -0.4 : 1;
+      const value = emit.value * scale;
+      const r = emit.range;
+      for (let dy = -r; dy <= r + b.size - 1; dy++) {
+        for (let dx = -r; dx <= r + b.size - 1; dx++) {
+          const px = b.x + dx;
+          const py = b.y + dy;
+          if (!w.inBounds(px, py)) continue;
+          // Chebyshev distance from the footprint edge.
+          const ox = dx < 0 ? -dx : dx >= b.size ? dx - b.size + 1 : 0;
+          const oy = dy < 0 ? -dy : dy >= b.size ? dy - b.size + 1 : 0;
+          const d = Math.max(ox, oy);
+          if (d > r) continue;
+          const falloff = Math.max(0, 1 - (d * emit.step) / (r + 1));
+          w.desirability[w.idx(px, py)] += Math.round(value * falloff);
+        }
+      }
+    }
+
+    // Terrain itself has an opinion: the river is pleasant, deep desert is not.
+    for (let i = 0; i < w.area; i++) {
+      const t = w.terrain[i];
+      if (t === Terrain.Marsh) w.desirability[i] -= 4;
+      else if (t === Terrain.Dune) w.desirability[i] -= 2;
+      else if (w.nearWater[i]) w.desirability[i] += 3;
+      if (w.road[i]) w.desirability[i] += 1;
+    }
+  }
+
+  markDirty(): void {
+    this.desirabilityDirty = true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Flood
+  // -------------------------------------------------------------------------
+
+  private stepFlood(): void {
+    const yearT = (this.tick % TICKS_PER_YEAR) / TICKS_PER_YEAR;
+    // The inundation swells through Akhet and drains away through early Peret.
+    // Peak around month 2.
+    let target = 0;
+    if (yearT < 0.02) {
+      this.nextFloodQuality = this.rollFloodQuality();
+    }
+    const riseStart = 0.0;
+    const peak = 0.17;
+    const fallEnd = 0.40;
+    if (yearT >= riseStart && yearT < peak) {
+      target = ((yearT - riseStart) / (peak - riseStart)) * this.nextFloodQuality;
+    } else if (yearT < fallEnd) {
+      target = (1 - (yearT - peak) / (fallEnd - peak)) * this.nextFloodQuality;
+    } else {
+      target = 0;
+    }
+    const prev = this.floodLevel;
+    this.floodLevel = approach(this.floodLevel, clamp(target, 0, 1), 0.004);
+
+    // Re-flag flooded tiles a few times a month rather than every tick.
+    if (this.tick % 20 === 0) this.world.applyFlood(this.floodLevel);
+
+    // As the waters recede past the threshold, silt is laid down — once per year.
+    if (prev > 0.05 && this.floodLevel <= 0.05) {
+      this.world.depositSilt(this.nextFloodQuality);
+      this.floodQuality = this.nextFloodQuality;
+      const q = this.nextFloodQuality;
+      const desc =
+        q > 0.85 ? 'a magnificent inundation' :
+        q > 0.65 ? 'a good inundation' :
+        q > 0.45 ? 'an adequate inundation' :
+        q > 0.25 ? 'a poor inundation' : 'a failed inundation';
+      this.pushMessage(
+        'The waters recede',
+        `The Nile has given you ${desc}. Your floodplain has been enriched accordingly.`,
+        q > 0.6 ? 'good' : q > 0.35 ? 'info' : 'warn',
+      );
+    }
+  }
+
+  private rollFloodQuality(): number {
+    // Osiris governs the river. A pleased god fills the fields; an angry one withholds.
+    const base = 0.5 + (this.godMood.osiris / 100) * 0.35;
+    return clamp(base + this.rng.float(-0.18, 0.18), 0.08, 1);
+  }
+
+  // -------------------------------------------------------------------------
+  // Messages
+  // -------------------------------------------------------------------------
+
+  pushMessage(title: string, body: string, kind: CityMessage['kind'] = 'info', tile?: number): void {
+    this.messages.unshift({
+      id: this.nextMessageId++, tick: this.tick, title, body, kind, tile, read: false,
+    });
+    if (this.messages.length > 60) this.messages.length = 60;
+  }
+
+  get unreadMessages(): number {
+    return this.messages.reduce((n, m) => n + (m.read ? 0 : 1), 0);
+  }
+
+  // -------------------------------------------------------------------------
+  // Entry points
+  // -------------------------------------------------------------------------
+
+  /** Pick map-edge tiles where people and caravans enter and leave. */
+  findEntryPoints(): void {
+    const w = this.world;
+    const N = w.size;
+    const candidates: number[] = [];
+    for (let x = 1; x < N - 1; x++) {
+      for (const y of [1, N - 2]) {
+        const i = w.idx(x, y);
+        if (w.terrain[i] === Terrain.Floodplain || w.terrain[i] === Terrain.Desert || w.terrain[i] === Terrain.Grass) {
+          candidates.push(i);
+        }
+      }
+    }
+    for (let y = 1; y < N - 1; y++) {
+      for (const x of [1, N - 2]) {
+        const i = w.idx(x, y);
+        if (w.terrain[i] === Terrain.Floodplain || w.terrain[i] === Terrain.Desert || w.terrain[i] === Terrain.Grass) {
+          candidates.push(i);
+        }
+      }
+    }
+    if (candidates.length) {
+      this.entryTile = candidates[Math.floor(candidates.length * 0.25)];
+      this.exitTile = candidates[Math.floor(candidates.length * 0.75)];
+    }
+  }
+
+  /** Total units of a good held anywhere the player controls. */
+  totalStored(g: GoodId): number {
+    let n = 0;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b) continue;
+      n += b.store[g] ?? 0;
+    }
+    return n;
+  }
+}

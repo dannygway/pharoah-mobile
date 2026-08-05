@@ -1,0 +1,17 @@
+{
+  "appId": "com.kemet.citybuilder",
+  "appName": "Kemet",
+  "webDir": "dist",
+  "backgroundColor": "#0c0a08",
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": false,
+    "backgroundColor": "#0c0a08",
+    "preferredContentMode": "mobile",
+    "limitsNavigationsToAppBoundDomains": true
+  },
+  "server": {
+    "iosScheme": "capacitor",
+    "androidScheme": "https"
+  }
+}

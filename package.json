@@ -1,0 +1,20 @@
+{
+  "name": "kemet",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "KEMET - Lord of the Two Lands. An Ancient Egypt city-builder for iPhone.",
+  "scripts": {
+    "dev": "npm run icons && vite --host",
+    "build": "npm run icons && vite build && node scripts/postbuild.mjs",
+    "icons": "node scripts/gen-icons.mjs",
+    "preview": "vite preview --host --port 4173",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "playwright": "^1.49.1"
+  }
+}
