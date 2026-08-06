@@ -31,7 +31,14 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      # Playwright is a devDependency used only by the smoke test. Its postinstall
+      # downloads a browser, which is slow at best and a build failure at worst in a
+      # runner that does not need it — but the build itself needs the other dev
+      # dependencies (vite, typescript), so they cannot simply be omitted.
+      - name: Install
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
       - name: Build
         run: npm run build
