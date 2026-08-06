@@ -57,8 +57,15 @@ the gate, plus an unlimited sandbox.
 
 ## Running it on your iPhone
 
-The game is a PWA. Once it is on your home screen it runs fullscreen, offline, with no
-Safari chrome and no App Store involved.
+**Live: https://dannygway.github.io/pharoah-mobile/**
+
+Open that in Safari, then **Share → Add to Home Screen**. You get a real app icon that
+launches fullscreen with no Safari chrome, clears the Dynamic Island, and runs with the
+network off — the service worker precaches the whole build on first visit.
+
+Every push to `main` rebuilds and redeploys it via `.github/workflows/deploy.yml`.
+
+The rest of this section covers running it yourself.
 
 ### Option A — from your Mac or PC on the same Wi-Fi (fastest)
 
@@ -74,7 +81,7 @@ Launch it from the icon. It will now work with the network off.
 > It must be `http://<LAN-IP>` or HTTPS — service workers do not register on
 > `file://`, so opening the HTML directly will work but will not install offline.
 
-### Option B — host it anywhere static
+### Option B — host it anywhere static (this is what the live URL does)
 
 `dist/` is entirely static and uses relative paths, so it works from a subdirectory.
 
