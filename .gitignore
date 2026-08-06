@@ -1,5 +1,6 @@
 node_modules/
 dist/
+# docs/ is the committed build, served by Pages' deploy-from-a-branch mode.
 *.log
 .DS_Store
 smoke-city.png
