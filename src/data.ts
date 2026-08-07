@@ -358,7 +358,7 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'house', name: 'Housing', cat: 'housing', size: 1, cost: 10, upkeep: 0, workers: 0,
     desc: 'Marks land for settlement. Immigrants raise their own huts; services turn huts into estates.',
-    needsRoad: true, fireRisk: 0.4, damageRisk: 0.3,
+    needsRoad: true, fireRisk: 0.25, damageRisk: 0.3,
     art: { style: 'house', base: '#b9a077', roof: '#8a6a3f', height: 12 },
   },
 
@@ -458,7 +458,7 @@ export const BUILDINGS: BuildingDef[] = [
     sector: 'industry', needsRoad: true,
     desc: 'Wheel-thrown jars and bowls. The first manufactured good any household demands.',
     consumes: { clay: 10 }, produces: 'pottery', produceQty: 10, cycleTicks: 620,
-    desirability: D(-5, 4, 2), fireRisk: 1.4,
+    desirability: D(-5, 4, 2), fireRisk: 0.87,
     art: { style: 'mud', base: '#a86a45', roof: '#7d4a30', height: 12 },
   },
   {
@@ -474,7 +474,7 @@ export const BUILDINGS: BuildingDef[] = [
     sector: 'industry', needsRoad: true,
     desc: 'Flax spun and woven into linen — clothing for the living and wrapping for the dead.',
     consumes: { flax: 10 }, produces: 'linen', produceQty: 9, cycleTicks: 680,
-    desirability: D(-4, 4, 2), fireRisk: 1.2,
+    desirability: D(-4, 4, 2), fireRisk: 0.74,
     art: { style: 'mud', base: '#b0a385', roof: '#7f7460', height: 12 },
   },
   {
@@ -482,7 +482,7 @@ export const BUILDINGS: BuildingDef[] = [
     sector: 'industry', needsRoad: true,
     desc: 'Barley mash fermented in vats. Beer is wages, medicine and celebration in one jar.',
     consumes: { grain: 12 }, produces: 'beer', produceQty: 9, cycleTicks: 700,
-    desirability: D(-4, 4, 2), fireRisk: 1.0,
+    desirability: D(-4, 4, 2), fireRisk: 0.62,
     art: { style: 'mud', base: '#a08447', roof: '#755c2f', height: 12 },
   },
   {
@@ -506,7 +506,7 @@ export const BUILDINGS: BuildingDef[] = [
     sector: 'industry', needsRoad: true,
     desc: 'Inlaid chests of cedar and gold. Only a stately manor asks for them, and only a rich city can supply them.',
     consumes: { timber: 8, gold: 5 }, produces: 'chests', produceQty: 5, cycleTicks: 860,
-    desirability: D(-3, 4, 2), fireRisk: 1.3,
+    desirability: D(-3, 4, 2), fireRisk: 0.81,
     art: { style: 'mud', base: '#a8823c', roof: '#6f5426', height: 13 },
   },
   {
@@ -514,7 +514,7 @@ export const BUILDINGS: BuildingDef[] = [
     sector: 'industry', needsRoad: true,
     desc: 'Copper smelted into spearheads and axes. Arms your forts and pays your tribute.',
     consumes: { copper: 10 }, produces: 'weapons', produceQty: 8, cycleTicks: 780,
-    desirability: D(-6, 4, 2), fireRisk: 1.8,
+    desirability: D(-6, 4, 2), fireRisk: 1.12,
     art: { style: 'mud', base: '#8f7a63', roof: '#5f5044', height: 13 },
   },
   {
@@ -522,7 +522,7 @@ export const BUILDINGS: BuildingDef[] = [
     sector: 'industry', needsRoad: true,
     desc: 'Bentwood, leather and bronze fittings. The most valuable thing your city can export.',
     consumes: { timber: 10, copper: 6 }, produces: 'chariots', produceQty: 4, cycleTicks: 1000,
-    desirability: D(-5, 4, 2), fireRisk: 1.6,
+    desirability: D(-5, 4, 2), fireRisk: 0.99,
     art: { style: 'mud', base: '#8a6a44', roof: '#5f4a2e', height: 14 },
   },
   {
@@ -602,7 +602,7 @@ export const BUILDINGS: BuildingDef[] = [
     sector: 'distribution', needsRoad: true,
     desc: 'Buyers fetch stock from your stores; sellers walk it to the doorstep of every house.',
     walkerRange: 22, walkerInterval: 130,
-    desirability: D(-2, 3, 1), fireRisk: 1.2,
+    desirability: D(-2, 3, 1), fireRisk: 0.74,
     art: { style: 'reed', base: '#b5804a', roof: '#c9564a', height: 10 },
   },
 

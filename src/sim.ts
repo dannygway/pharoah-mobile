@@ -204,6 +204,12 @@ export class City {
   godMood: Record<GodId, number> = { osiris: 20, ra: 20, ptah: 20, seth: 20, bast: 20 };
   /** Months since each god's last festival. */
   godFestival: Record<GodId, number> = { osiris: 0, ra: 0, ptah: 0, seth: 0, bast: 0 };
+  /** Consecutive months a god has spent furious. Wrath needs persistence, not one bad roll. */
+  godAnger: Record<GodId, number> = { osiris: 0, ra: 0, ptah: 0, seth: 0, bast: 0 };
+  /** Months before a god who has already struck may strike again. */
+  godWrathCooldown: Record<GodId, number> = { osiris: 0, ra: 0, ptah: 0, seth: 0, bast: 0 };
+  /** How many times Seth has acted. His answer escalates; it does not open with an army. */
+  sethStrikes = 0;
 
   ratings: Ratings = { culture: 0, prosperity: 0, monument: 0, kingdom: 50 };
 

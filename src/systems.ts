@@ -209,8 +209,32 @@ export class Systems {
       add(40 + Math.min(20, e.n), `${e.n} houses cannot improve`, blocker, e.tile);
     }
 
-    out.sort((a, b) => b.severity - a.severity);
-    return out.slice(0, limit);
+    // Fold repeats. Twenty workshops all short of clay is one problem with a count,
+    // not twenty rows: a fault list that scrolls is a fault list nobody reads, which is
+    // the whole reason this panel exists on a phone. The first of each kind keeps its
+    // location so the entry stays one tap from somewhere worth looking.
+    const folded: CityProblem[] = [];
+    const byKind = new Map<string, CityProblem & { n: number }>();
+    for (const p of out) {
+      // Group by the sentence, not the building: "Potter has no workers" and "Brewery
+      // has no workers" share a cause and a fix.
+      const key = `${p.severity}|${p.cause}`;
+      const seen = byKind.get(key);
+      if (seen) {
+        seen.n++;
+        continue;
+      }
+      const entry = { ...p, n: 1 };
+      byKind.set(key, entry);
+      folded.push(entry);
+    }
+    for (const p of folded) {
+      const n = (p as CityProblem & { n: number }).n;
+      if (n > 1) p.title = `${p.title} (and ${n - 1} more like it)`;
+    }
+
+    folded.sort((a, b) => b.severity - a.severity);
+    return folded.slice(0, limit);
   }
 
   // -------------------------------------------------------------------------
@@ -584,9 +608,17 @@ export class Systems {
   // -------------------------------------------------------------------------
 
   /**
-   * Each god compares the worship it receives against the size of your city. A small
-   * city with one temple each keeps everyone content; a large one needs complexes and
-   * regular festivals or the pantheon turns on you.
+   * Each god weighs the worship it receives against the size of your city.
+   *
+   * The demand starts near nothing and grows with the city, because a hamlet of sixty
+   * people owes the pantheon very little. The previous curve charged a flat hundred and
+   * twenty per god before population even entered the sum, which a village could not
+   * meet at any level of skill — five staffed temples cost more workers than it had —
+   * so the whole pantheon turned hostile inside two years of every game, regardless of
+   * how well it was played. That is not difficulty, it is a bill you cannot pay.
+   *
+   * Falling out of favour is also deliberately much slower than climbing back into it.
+   * Neglect should take years to become dangerous and one festival to begin undoing.
    */
   private updateGods(): void {
     const city = this.city;
@@ -599,35 +631,67 @@ export class Systems {
         if (!b || !b.built) continue;
         const def = city.def(b);
         if (def.god !== g) continue;
-        if (def.id.startsWith('shrine_')) worship += 40;
-        else if (def.id.startsWith('temple_')) worship += b.staffing > 0 ? 260 : 60;
-        else if (def.id.startsWith('complex_')) worship += b.staffing > 0 ? 1400 : 300;
+        if (def.id.startsWith('shrine_')) worship += 60;
+        else if (def.id.startsWith('temple_')) worship += b.staffing > 0 ? 320 : 90;
+        else if (def.id.startsWith('complex_')) worship += b.staffing > 0 ? 1600 : 380;
       }
       // An oracle placates the whole pantheon a little.
-      worship += city.countOf('oracle') * 90;
+      worship += city.countOf('oracle') * 120;
 
-      // Needed worship grows with population.
-      const needed = 120 + pop * 1.5;
+      // A shrine each — 60 apiece, no workers, 60 deben — holds a village of a hundred.
+      const needed = 25 + pop * 0.85;
       const ratio = worship / needed;
-      let delta = clamp((ratio - 1) * 9, -7, 5);
+      // Asymmetric on purpose: neglect drifts, devotion recovers.
+      let delta = ratio >= 1 ? Math.min((ratio - 1) * 6, 6) : Math.max((ratio - 1) * 2.4, -1.6);
 
-      // Festivals are the fastest way back into a god's good books.
+      // A city that never holds a festival at all is a city the gods eventually notice.
       city.godFestival[g]++;
-      if (city.godFestival[g] > 30) delta -= 1.2;
+      if (city.godFestival[g] > 60) delta -= 0.5;
 
-      // The other gods resent a favourite.
       city.godMood[g] = clamp(city.godMood[g] + delta, -100, 100);
     }
 
     this.applyGodEffects();
   }
 
+  /**
+   * Blessings and wrath.
+   *
+   * Wrath needs a god to have been furious for the better part of a year, and having
+   * struck once it will not strike again for a good while. A single unlucky roll the
+   * month a god crosses the threshold gave no chance to react and no sense that the
+   * city had earned it — and with five gods on independent rolls, something was always
+   * going wrong somewhere.
+   */
   private applyGodEffects(): void {
     const city = this.city;
+    const youngCity = city.tick < TICKS_PER_YEAR * 3;
+
     for (const g of GOD_IDS) {
       const mood = city.godMood[g];
-      if (mood > 78 && city.rng.chance(0.10)) this.blessing(g);
-      else if (mood < -70 && city.rng.chance(0.12)) this.wrath(g);
+      if (city.godWrathCooldown[g] > 0) city.godWrathCooldown[g]--;
+
+      if (mood < -70) city.godAnger[g]++;
+      else city.godAnger[g] = 0;
+
+      if (mood > 78 && city.rng.chance(0.12)) {
+        this.blessing(g);
+        continue;
+      }
+      // Ten months of sustained fury, no recent strike, and not in the opening years,
+      // when a governor is still laying roads and has nothing to give anyone.
+      if (mood < -70 && city.godAnger[g] >= 10 && city.godWrathCooldown[g] === 0 && !youngCity) {
+        if (city.rng.chance(0.10)) {
+          this.wrath(g);
+          city.godAnger[g] = 0;
+          city.godWrathCooldown[g] = 24;
+          // Having taken their due, the god is partly satisfied. Without this a city
+          // that fell to -100 stayed there — every god firing on its own cooldown
+          // forever, a wrath every few months, while the wreckage made recovery
+          // impossible. Punishment has to have an end the player can reach.
+          city.godMood[g] = Math.max(city.godMood[g], -45);
+        }
+      }
     }
   }
 
@@ -676,27 +740,60 @@ export class Systems {
         city.nextFloodQuality = clamp(city.nextFloodQuality - 0.4, 0.05, 1);
         break;
       case 'ra': {
-        // Fire breaks out in several buildings at once.
+        // Ra's anger makes the city tinder-dry. It does not light the fires itself:
+        // setting buildings straight to a hundred and twenty destroyed three or four
+        // at once with no warning and nothing a firehouse could do, which reads as the
+        // game taking a turn rather than as a hazard the player failed to manage.
+        //
+        // Capped at the threshold that puts a building on the fault list, so the player
+        // gets four named alarms and roughly three months to answer them — not five
+        // buildings quietly sitting one point below ignition.
         const ids = city.liveBuildings.filter((i) => city.buildings[i]);
         for (let k = 0; k < 4 && ids.length; k++) {
           const b = city.buildings[city.rng.pick(ids)];
-          if (b) b.fire = 120;
+          if (b) b.fire = Math.min(89, b.fire + 45);
         }
         break;
       }
       case 'ptah':
         for (const id of city.liveBuildings) {
           const b = city.buildings[id];
-          if (b && city.def(b).cat === 'industry' && city.rng.chance(0.25)) b.damage = 120;
+          if (b && city.def(b).cat === 'industry' && city.rng.chance(0.3)) {
+            b.damage = Math.min(89, b.damage + 45);
+          }
         }
         break;
-      case 'seth':
-        this.scheduleInvasion(city.tick + TICKS_PER_MONTH * 4, 'Followers of Seth', 10);
+      case 'seth': {
+        // Seth escalates. The first strikes hollow out the army and set the city on
+        // edge; only sustained neglect brings the raiders. Opening with an invasion
+        // every time gave a city with no fort no answer at all, and no warning that
+        // one was needed.
+        const strikes = city.sethStrikes++;
+        if (strikes < 2) {
+          for (const id of city.liveBuildings) {
+            const b = city.buildings[id];
+            if (b?.garrison) {
+              b.garrison.morale = Math.max(20, b.garrison.morale - 45);
+              b.garrison.strength = Math.max(0, Math.round(b.garrison.strength * 0.7));
+            }
+          }
+          city.sentiment = Math.max(0, city.sentiment - 12);
+          break;
+        }
+        // A year's warning, and a raid sized to the city rather than a flat ten.
+        this.scheduleInvasion(
+          city.tick + TICKS_PER_YEAR,
+          'Followers of Seth',
+          clamp(Math.round(city.population / 70), 3, 12),
+        );
         break;
+      }
       case 'bast':
         for (const id of city.liveBuildings) {
           const b = city.buildings[id];
-          if (b?.house && city.rng.chance(0.3)) b.house.health = Math.min(b.house.health, 25);
+          if (b?.house && city.rng.chance(0.3)) {
+            b.house.health = Math.max(30, b.house.health - 40);
+          }
         }
         break;
     }
@@ -791,18 +888,28 @@ export class Systems {
   // Disasters
   // -------------------------------------------------------------------------
 
+  /**
+   * Fire, collapse, plague and theft.
+   *
+   * All of them are held off entirely for the first two years. A governor laying their
+   * first roads has neither the workers to staff a firehouse nor the money to build
+   * one, so a disaster in year one is not a lesson, it is a coin toss that ends the
+   * mission. After that they are real, and every one of them is preceded by a warning
+   * on the fault list well before it fires.
+   */
   private runDisasters(): void {
     const city = this.city;
+    if (city.tick < TICKS_PER_YEAR * 2) return;
 
     for (const id of [...city.liveBuildings]) {
       const b = city.buildings[id];
       if (!b || !b.built) continue;
 
-      if (b.fire >= 100 && city.rng.chance(0.35)) {
+      if (b.fire >= 100 && city.rng.chance(0.18)) {
         this.burn(b);
         continue;
       }
-      if (b.damage >= 100 && city.rng.chance(0.28)) {
+      if (b.damage >= 100 && city.rng.chance(0.14)) {
         city.pushMessage(
           'A building has collapsed',
           `Neglected walls have given way. An architect's post nearby would have prevented this.`,
@@ -814,14 +921,14 @@ export class Systems {
     }
 
     // Disease. Marsh-side districts with poor health and an angry Bast suffer.
-    if (city.stats.avgHealth < 40 && city.rng.chance(0.25)) {
+    if (city.stats.avgHealth < 32 && city.rng.chance(0.12)) {
       let struck = 0;
       for (const id of city.liveBuildings) {
         const b = city.buildings[id];
         if (!b?.house || b.house.people <= 0) continue;
-        if (b.house.health > 45) continue;
-        if (!city.rng.chance(0.3)) continue;
-        const lost = Math.ceil(b.house.people * 0.25);
+        if (b.house.health > 38) continue;
+        if (!city.rng.chance(0.22)) continue;
+        const lost = Math.ceil(b.house.people * 0.15);
         b.house.people -= lost;
         city.population -= lost;
         b.house.health = Math.max(5, b.house.health - 20);
@@ -838,7 +945,7 @@ export class Systems {
     }
 
     // Tomb robbers go after a finished monument if the city is lawless.
-    if (city.stats.crime > 40 && city.rng.chance(0.08)) {
+    if (city.stats.crime > 55 && city.rng.chance(0.04)) {
       city.funds -= 200;
       city.pushMessage(
         'Tomb robbers',

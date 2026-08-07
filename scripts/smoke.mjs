@@ -287,6 +287,7 @@ for (let i = 0; i < 22; i++) {
       fps: +window.kemet.game.scene.fps.toFixed(0),
       sprites: window.kemet.game.renderer.lastSpriteCount,
       blocker: topBlocker ? `${topBlocker[1]}× ${topBlocker[0]}` : '',
+      problems: window.kemet.game.systems.cityProblems(40).length,
     };
   });
   samples.push(s);

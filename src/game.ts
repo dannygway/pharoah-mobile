@@ -639,7 +639,8 @@ export class Game {
       city: {
         tick: c.tick, funds: c.funds, savings: c.savings, salary: c.salary,
         taxRate: c.taxRate, population: c.population,
-        godMood: c.godMood, godFestival: c.godFestival, ratings: c.ratings,
+        godMood: c.godMood, godFestival: c.godFestival, godAnger: c.godAnger,
+        godWrathCooldown: c.godWrathCooldown, sethStrikes: c.sethStrikes, ratings: c.ratings,
         floodLevel: c.floodLevel, floodQuality: c.floodQuality, nextFloodQuality: c.nextFloodQuality,
         messages: c.messages.slice(0, 30), trade: c.trade, requests: c.requests,
         invasions: c.invasions, entryTile: c.entryTile, exitTile: c.exitTile,
@@ -681,7 +682,10 @@ export class Game {
       Object.assign(c, {
         tick: s.tick, funds: s.funds, savings: s.savings, salary: s.salary,
         taxRate: s.taxRate, population: s.population, godMood: s.godMood,
-        godFestival: s.godFestival, ratings: s.ratings, floodLevel: s.floodLevel,
+        godFestival: s.godFestival, godAnger: s.godAnger ?? c.godAnger,
+        godWrathCooldown: s.godWrathCooldown ?? c.godWrathCooldown,
+        sethStrikes: s.sethStrikes ?? 0,
+        ratings: s.ratings, floodLevel: s.floodLevel,
         floodQuality: s.floodQuality, nextFloodQuality: s.nextFloodQuality,
         messages: s.messages ?? [], trade: s.trade ?? [], requests: s.requests ?? [],
         invasions: s.invasions ?? [], entryTile: s.entryTile, exitTile: s.exitTile,
