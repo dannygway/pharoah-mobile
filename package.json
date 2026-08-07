@@ -10,7 +10,8 @@
     "icons": "node scripts/gen-icons.mjs",
     "preview": "vite preview --host --port 4173",
     "typecheck": "tsc --noEmit",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "npm run build && node scripts/smoke.mjs",
+    "standalone": "npm run build && node scripts/standalone.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

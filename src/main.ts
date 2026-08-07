@@ -86,7 +86,10 @@ async function main(): Promise<void> {
       const data = readSave(slot);
       if (!data) return;
       const g = new Game(canvas, atlas, audio, data.mission);
-      if (g.load(data)) startGame(g);
+      if (!g.load(data)) return;
+      startGame(g);
+      // Answer "what happened while I was gone" before anything else on the screen.
+      if (!ui.openAwaySummary()) g.markResumePoint();
     };
 
     // Drive the cheap per-frame UI updates from the same clock as the renderer.

@@ -159,6 +159,30 @@ button.small { padding: 6px 9px; }
 .pill .pn { font-size: 8px; color: var(--ink-dim); letter-spacing: 0.05em; text-transform: uppercase; }
 .pill .pv { font-size: 13px; font-variant-numeric: tabular-nums; }
 
+/* The status strip: Nilometer, sentiment and the fault count, each a live reading
+   with a band and a direction, and each one tap from what it is telling you about. */
+.tb-row.three { gap: 5px; }
+.strip {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(30, 25, 18, 0.85);
+  border: 1px solid var(--edge);
+  color: var(--ink-dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+.strip.nile { color: #7fb6cc; }
+.strip.mood.bad { color: var(--warn); }
+.strip.probs { flex: 0 0 auto; text-align: center; }
+.strip.probs.ok { color: var(--good); }
+.strip.probs.bad { color: #201a10; background: var(--bad); border-color: var(--bad); }
+
 .tb-ctl { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .tb-ctl .icon { padding: 5px 7px; font-size: 14px; line-height: 1.1; }
 .tb-ctl .sp { min-width: 34px; font-size: 12px; }
@@ -168,7 +192,7 @@ button.small { padding: 6px 9px; }
 
 .goals-panel {
   position: absolute;
-  top: calc(var(--safe-t) + 78px);
+  top: calc(var(--safe-t) + 104px);
   left: calc(var(--safe-l) + 8px);
   width: min(280px, 62vw);
   background: var(--panel);
@@ -192,7 +216,7 @@ button.small { padding: 6px 9px; }
 
 .minimap {
   position: absolute;
-  top: calc(var(--safe-t) + 78px);
+  top: calc(var(--safe-t) + 104px);
   right: calc(var(--safe-r) + 8px);
   width: 132px;
   height: 132px;
@@ -420,7 +444,7 @@ h4 { margin: 12px 0 5px; font-size: 11px; text-transform: uppercase; letter-spac
 
 .toasts {
   position: absolute;
-  top: calc(var(--safe-t) + 78px);
+  top: calc(var(--safe-t) + 104px);
   left: 50%;
   transform: translateX(-50%);
   width: min(400px, calc(100vw - 32px));
@@ -515,4 +539,133 @@ h4 { margin: 12px 0 5px; font-size: 11px; text-transform: uppercase; letter-spac
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+
+/* --------------------------------------------------- diagnosis and new panels */
+
+/* Mode chips: one per way the world is currently being drawn, each with its own
+   dismiss, so a recoloured city is never a mystery. */
+.mode-chips {
+  position: absolute;
+  left: calc(var(--safe-l) + 8px);
+  right: calc(var(--safe-r) + 8px);
+  bottom: calc(var(--safe-b) + 96px);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  pointer-events: none;
+}
+.mode-chip {
+  pointer-events: auto;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(30, 25, 18, 0.94);
+  border: 1px solid var(--edge);
+  color: var(--gold-bright);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.mode-chip.halo { color: #7fd0ee; border-color: rgba(127, 208, 238, 0.4); }
+/* When a mode chip is showing, the selection card steps up to clear it. */
+#ui.has-chips .card { bottom: calc(var(--safe-b) + 128px); }
+
+.chief-mood {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: rgba(40, 33, 22, 0.7);
+  border: 1px solid var(--edge);
+}
+.chief-mood .cm-face { font-size: 24px; line-height: 1; }
+.chief-mood .cm-band { font-size: 13px; color: var(--gold-bright); }
+.chief-mood .cm-cause { font-size: 11px; color: var(--ink-dim); line-height: 1.4; margin-top: 2px; }
+
+.problem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 0 0 6px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border-left: 3px solid var(--warn);
+}
+.problem.sev-hi { border-left-color: var(--bad); }
+.problem.sev-lo { border-left-color: var(--ink-dim); }
+.problem .pt { font-size: 12.5px; color: var(--gold-bright); }
+.problem .pc { font-size: 11px; color: var(--ink-dim); line-height: 1.45; margin-top: 3px; }
+.problem .pj { font-size: 10px; color: var(--gold); margin-top: 4px; letter-spacing: 0.04em; }
+
+.mon-site {
+  padding: 9px 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--edge);
+}
+.mon-site b { color: var(--gold-bright); font-size: 13px; }
+.mon-done { font-size: 11px; color: var(--good); margin-top: 4px; }
+
+/* Storage orders. Every target here is at least 44px on its shortest side, because
+   this is the one screen a player will visit while walking. */
+.orders .search {
+  width: 100%;
+  padding: 10px 12px;
+  margin: 4px 0 10px;
+  font-size: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--edge);
+  background: rgba(12, 10, 8, 0.7);
+  color: var(--ink);
+  font-family: var(--font);
+}
+.order-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(201, 162, 74, 0.12);
+  flex-wrap: wrap;
+}
+.or-name { display: flex; align-items: center; gap: 6px; font-size: 12px; flex: 1 1 130px; min-width: 0; }
+.or-name .og { font-size: 15px; }
+.or-name .oq { margin-left: auto; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.seg { display: flex; border-radius: 9px; overflow: hidden; border: 1px solid var(--edge); }
+.seg .sg {
+  border: 0;
+  border-radius: 0;
+  min-width: 52px;
+  min-height: 44px;
+  font-size: 11px;
+  background: transparent;
+}
+.seg .sg.on { background: var(--gold); color: #201a10; }
+.or-empty { min-height: 44px; font-size: 11px; padding: 0 10px; color: var(--ink-dim); }
+
+/* While you were away. */
+.away .row { border-bottom: 1px solid rgba(201, 162, 74, 0.12); }
+.away-ev { font-size: 11.5px; color: var(--ink-dim); line-height: 1.5; padding: 3px 0; }
+.away-ev.bad { color: var(--warn); }
+
+/* Undo. A toast with one button, gone in five seconds. */
+.toast.undo {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-left-color: var(--gold);
+}
+.toast.undo .tt { margin: 0; flex: 1; color: var(--ink); }
+.undo-btn {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 12px;
+  background: var(--gold);
+  color: #201a10;
+  border-color: var(--gold-bright);
 }

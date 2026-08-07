@@ -485,6 +485,45 @@ export class World {
     }
   }
 
+  /**
+   * Every road tile within `maxSteps` road tiles of `start`, as tile indices.
+   *
+   * This is the set a roaming walker leaving `start` could still stand on before its
+   * wander budget runs out. Any one roamer traces a single path through it, but the
+   * union is exactly the answer to "can this service ever reach that house" — the
+   * question the whole genre turns on, and one no interface has previously shown.
+   */
+  roadsWithin(start: number, maxSteps: number, out: number[] = []): number[] {
+    out.length = 0;
+    if (start < 0 || !this.road[start]) return out;
+    const epoch = ++this.visitEpoch;
+    const stamp = this.visitStamp;
+    const dist = this.cameFrom; // reused as a depth counter rather than a parent link
+    const q = this.queue;
+    let head = 0;
+    let tail = 0;
+    q[tail++] = start;
+    stamp[start] = epoch;
+    dist[start] = 0;
+    const nb = new Int32Array(4);
+
+    while (head < tail) {
+      const cur = q[head++];
+      out.push(cur);
+      const d = dist[cur];
+      if (d >= maxSteps) continue;
+      const n = this.roadNeighbours(cur, nb);
+      for (let k = 0; k < n; k++) {
+        const nx = nb[k];
+        if (stamp[nx] === epoch) continue;
+        stamp[nx] = epoch;
+        dist[nx] = d + 1;
+        q[tail++] = nx;
+      }
+    }
+    return out;
+  }
+
   /** True if any road tile satisfying `isGoal` is reachable from `start`. */
   roadReachable(start: number, isGoal: (i: number) => boolean, maxSteps = 400): boolean {
     return this.findRoadPath(start, isGoal, maxSteps) !== null;

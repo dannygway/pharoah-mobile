@@ -18,6 +18,16 @@ import type { Building, City, TradeRoute, PharaohRequest, Invasion } from './sim
 
 export type TradePolicy = 'none' | 'import' | 'export';
 
+/** One diagnosed fault in the city, ranked by how much it matters. */
+export interface CityProblem {
+  severity: number;
+  title: string;
+  /** Plain language, names the cause and the fix. */
+  cause: string;
+  tile?: number;
+  buildingId?: number;
+}
+
 /** Which guild hauls which material to a monument site. */
 const GUILD_MATERIALS: Record<string, GoodId[]> = {
   bricklayer_guild: ['bricks'],
@@ -33,6 +43,7 @@ export class Systems {
   tradeLimit: Partial<Record<GoodId, number>> = {};
 
   private logisticsTimer = 0;
+  private performerTimer = 0;
   private monumentTimer = 0;
   private monthTimer = 0;
   private lastMonth = -1;
@@ -56,6 +67,11 @@ export class Systems {
       this.monumentTimer = 0;
       this.runMonuments();
     }
+    if (++this.performerTimer >= 120) {
+      this.performerTimer = 0;
+      this.runPerformers();
+      this.runGetOrders();
+    }
 
     const m = city.month;
     if (m !== this.lastMonth) {
@@ -70,6 +86,131 @@ export class Systems {
 
     this.runFestival();
     this.runCombat();
+  }
+
+  // -------------------------------------------------------------------------
+  // Diagnosis
+  // -------------------------------------------------------------------------
+
+  /**
+   * Everything currently wrong with the city, ranked. This is the single source of
+   * truth behind both the Problems overlay and the chief advisor, so the map and the
+   * panel can never disagree about what is broken.
+   *
+   * The principle throughout: name the cause, not the symptom. "Understaffed" is a
+   * symptom. "No storage will accept its pottery" is a cause the player can act on.
+   */
+  cityProblems(limit = 40): CityProblem[] {
+    const city = this.city;
+    const out: CityProblem[] = [];
+    const add = (severity: number, title: string, cause: string, tile?: number, buildingId?: number) =>
+      out.push({ severity, title, cause, tile, buildingId });
+
+    // City-wide first: these outrank any single building.
+    if (city.funds < 0) {
+      add(100, 'The treasury is empty',
+        `You are ${Math.round(-city.funds)} deben in debt. Raise taxes, export more, or stop building.`);
+    }
+    const foodMonths = city.foodMonthsRemaining();
+    if (city.population > 0 && foodMonths < 1) {
+      add(95, 'The city is running out of food',
+        `About ${foodMonths.toFixed(1)} months left. Build farms, or import food through a trade route.`);
+    }
+    if (city.stats.workersNeeded > city.workforce * 1.15 && city.workforce > 0) {
+      add(80, 'Labour shortage',
+        `${city.workforce} workers for ${city.stats.workersNeeded} jobs. House more people, mothball what you do not need, or reorder the labour advisor.`);
+    }
+    if (city.sentiment < 30) add(78, 'Your people are unhappy', city.sentimentCause);
+    for (const g of GOD_IDS) {
+      if (city.godMood[g] < -55) {
+        add(76, `${GODS[g].name} is angry`,
+          `Build temples to ${GODS[g].name} or hold a festival before the wrath falls.`);
+      }
+    }
+    for (const inv of city.invasions) {
+      if (!inv.landed && city.tick > inv.arrivalTick - TICKS_PER_MONTH * 6) {
+        add(85, 'Invasion coming', `${inv.enemy}, strength ${inv.strength}. Muster your forts.`, inv.entryTile);
+      }
+    }
+
+    // Then per building.
+    for (const id of city.liveBuildings) {
+      const b = city.buildings[id];
+      if (!b || !b.built) continue;
+      const def = city.def(b);
+      const tile = city.world.idx(b.x, b.y);
+
+      if (b.fire > 88) {
+        add(90, `${def.name} is about to burn`, 'A firehouse walker must reach it.', tile, id);
+        continue;
+      }
+      if (b.damage > 88) {
+        add(86, `${def.name} is about to collapse`, "An architect's post must reach it.", tile, id);
+        continue;
+      }
+      if (def.needsRoad && !b.hasRoad) {
+        add(70, `${def.name} has no road`, 'Nothing can reach it and it does nothing. Connect it.', tile, id);
+        continue;
+      }
+      if (def.workers > 0 && b.staffing <= 0 && b.enabled) {
+        add(62, `${def.name} has no workers`,
+          'Its whole sector is being outbid. Raise it in the labour advisor or house more people.', tile, id);
+        continue;
+      }
+      if (b.monument && !b.monument.complete) {
+        const stall = this.monumentStall(b);
+        if (stall) add(74, `${def.name} has stalled`, stall, tile, id);
+        continue;
+      }
+      if (def.needsPerformerFrom && (b.performers ?? 0) <= 0) {
+        const school = BUILDING_BY_ID[def.needsPerformerFrom]?.name ?? def.needsPerformerFrom;
+        add(58, `${def.name} stands empty`,
+          `No performer. Build a ${school.toLowerCase()} within reach of it.`, tile, id);
+        continue;
+      }
+      if (def.produces) {
+        const have = b.store[def.produces] ?? 0;
+        if (have >= (def.produceQty ?? 8) * 2) {
+          add(60, `${def.name} cannot deliver`,
+            `It is full of ${GOODS[def.produces].name.toLowerCase()} and no store will take it.`, tile, id);
+          continue;
+        }
+      }
+      if (def.consumes && b.staffing > 0) {
+        for (const [gRaw, needRaw] of Object.entries(def.consumes)) {
+          const g = gRaw as GoodId;
+          if ((b.store[g] ?? 0) < (needRaw as number) && city.totalStored(g) <= 0) {
+            add(56, `${def.name} is idle`,
+              `Waiting for ${GOODS[g].name.toLowerCase()}, and the city has none.`, tile, id);
+            break;
+          }
+        }
+      }
+      if (def.id === 'bazaar' && b.staffing > 0) {
+        const stock = Object.values(b.store).reduce((a: number, v) => a + (v ?? 0), 0);
+        if (stock < 2) {
+          add(64, 'Bazaar has nothing to sell',
+            'Its buyer cannot find a stocked granary or storage yard in reach. Put one closer.', tile, id);
+        }
+      }
+    }
+
+    // Housing blockers, aggregated: forty houses stuck on the same thing is one problem.
+    const blockers = new Map<string, { n: number; tile: number }>();
+    for (const id of city.liveBuildings) {
+      const b = city.buildings[id];
+      if (!b?.house || b.house.people <= 0 || !b.house.blocker) continue;
+      const e = blockers.get(b.house.blocker);
+      if (e) e.n++;
+      else blockers.set(b.house.blocker, { n: 1, tile: city.world.idx(b.x, b.y) });
+    }
+    for (const [blocker, e] of blockers) {
+      if (e.n < 3) continue;
+      add(40 + Math.min(20, e.n), `${e.n} houses cannot improve`, blocker, e.tile);
+    }
+
+    out.sort((a, b) => b.severity - a.severity);
+    return out.slice(0, limit);
   }
 
   // -------------------------------------------------------------------------
@@ -104,6 +245,167 @@ export class Systems {
         if (city.walkers.spawnSupply(src, b, g, qty)) break;
       }
     }
+  }
+
+  /**
+   * Schools send performers to venues. The venue is the thing the player sees standing
+   * idle, but the school is the thing that was missing, so the link is explicit.
+   */
+  private runPerformers(): void {
+    const city = this.city;
+    for (const id of city.liveBuildings) {
+      const venue = city.buildings[id];
+      if (!venue || !venue.built || !venue.hasRoad) continue;
+      const def = city.def(venue);
+      if (!def.needsPerformerFrom) continue;
+      if ((venue.performers ?? 0) > 0.55) continue;
+
+      for (const sid of city.liveBuildings) {
+        const school = city.buildings[sid];
+        if (!school || school.defId !== def.needsPerformerFrom) continue;
+        if (!school.built || !school.hasRoad || school.staffing <= 0) continue;
+        const entrance = city.world.roadEntrance(school.x, school.y, school.size);
+        if (entrance < 0) continue;
+        // Reuse the supply walker: a performer is a purposeful walker with no cargo.
+        if (city.walkers.spawnSupply(school, venue, 'papyrus', 0)) {
+          venue.performers = 1;
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * A store set to Get a good dispatches carts to fetch it from stores that hold it.
+   * This is how food crosses a city from the farming district to the housing district
+   * without every bazaar buyer making the trip itself.
+   */
+  private runGetOrders(): void {
+    const city = this.city;
+    for (const id of city.liveBuildings) {
+      const dest = city.buildings[id];
+      if (!dest?.orders || !dest.built || !dest.hasRoad || dest.staffing <= 0) continue;
+      const def = city.def(dest);
+      if (!def.storage) continue;
+      const used = Object.values(dest.store).reduce((a: number, v) => a + (v ?? 0), 0);
+      if (used >= def.storage) continue;
+      if (dest.walkers.length >= 2) continue;
+
+      for (const [gRaw, order] of Object.entries(dest.orders)) {
+        if (order !== 'get') continue;
+        const g = gRaw as GoodId;
+        if ((dest.store[g] ?? 0) > 40) continue;
+        const src = this.findYardWith(dest, g, 8);
+        if (src < 0 || src === id) continue;
+        const from = city.buildings[src]!;
+        const qty = Math.min(from.store[g] ?? 0, 30);
+        if (qty < 4) continue;
+        if (city.walkers.spawnSupply(from, dest, g, qty)) break;
+      }
+    }
+  }
+
+  /**
+   * Why a monument is not advancing, in the order the causes actually occur. On desktop
+   * a player finds these by clicking through five buildings; naming the cause is not
+   * hand holding, hiding it behind five taps is just friction.
+   */
+  monumentStall(site: Building): string | null {
+    const city = this.city;
+    const def = city.def(site);
+    if (!def.monument || site.monument?.complete) return null;
+    const stage = def.monument.stages[site.monument!.stage];
+    if (!stage) return null;
+
+    const needed = (Object.keys(stage.materials) as GoodId[])
+      .filter((g) => (site.monument!.delivered[g] ?? 0) < (stage.materials[g] ?? 0));
+
+    for (const g of needed) {
+      const name = GOODS[g].name.toLowerCase();
+      const producedAnywhere = city.liveBuildings.some((i) => {
+        const b = city.buildings[i];
+        return b && city.def(b).produces === g;
+      }) || city.totalStored(g) > 0;
+      if (!producedAnywhere) {
+        return `You have no source of ${name}. Build a quarry or workshop for it, or open a trade route.`;
+      }
+      const inStore = city.liveBuildings.some((i) => {
+        const b = city.buildings[i];
+        return b && (b.defId === 'storage_yard' || b.defId === 'granary') && (b.store[g] ?? 0) >= 4;
+      });
+      if (!inStore) {
+        return `No ${name} is reaching the site. Set a nearby storage yard to Get ${name}.`;
+      }
+    }
+
+    const camps = city.liveBuildings
+      .map((i) => city.buildings[i])
+      .filter((b) => b?.defId === 'work_camp');
+    if (!camps.length) return 'There are no labourers. Build a work camp near the site.';
+    if (!camps.some((b) => b!.staffing > 0)) {
+      return 'Your work camps have no workers. Raise Monuments in the labour advisor, or house more people.';
+    }
+
+    for (const g of needed) {
+      const guild = Object.entries(GUILD_MATERIALS).find(([, mats]) => mats.includes(g));
+      if (!guild) continue;
+      const have = city.liveBuildings.some((i) => {
+        const b = city.buildings[i];
+        return b?.defId === guild[0] && b.staffing > 0;
+      });
+      if (!have) {
+        const label = BUILDING_BY_ID[guild[0]]?.name ?? guild[0];
+        return `This phase needs a ${label.toLowerCase()}. Build one and make sure it is staffed.`;
+      }
+    }
+
+    if (site.monument!.laborDone < stage.labor && city.stats.workersNeeded > city.workforce) {
+      return 'Monument workers are being outbid elsewhere. Raise Monuments in the labour advisor.';
+    }
+    return null;
+  }
+
+  /**
+   * The reachability halo: every road tile a walker leaving this building could still
+   * be standing on before its wander budget runs out, and every house beside one.
+   *
+   * Nothing here changes the simulation. It makes visible what an expert computes in
+   * their head and a novice never learns, which is why it is offered on every building
+   * that sends a walker out, and gated behind nothing.
+   */
+  reachabilityHalo(site: Building): { roads: number[]; served: number[]; range: number } | null {
+    const city = this.city;
+    const w = city.world;
+    const def = city.def(site);
+    const range = def.walkerRange ?? 0;
+    if (!range) return null;
+    const entrance = w.roadEntrance(site.x, site.y, site.size);
+    if (entrance < 0) return { roads: [], served: [], range };
+
+    const roads = w.roadsWithin(entrance, range);
+    // A house is served by standing beside a road the walker uses, not on it, so the
+    // served set is the one-tile skirt around the halo.
+    const served: number[] = [];
+    const seen = new Set<number>();
+    const around: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (const t of roads) {
+      const x = w.xOf(t);
+      const y = w.yOf(t);
+      for (const [dx, dy] of around) {
+        if (!w.inBounds(x + dx, y + dy)) continue;
+        const id = w.building[w.idx(x + dx, y + dy)];
+        if (id < 0 || seen.has(id)) continue;
+        const b = city.buildings[id];
+        if (!b?.house) continue;
+        seen.add(id);
+        for (let by = 0; by < b.size; by++) {
+          for (let bx = 0; bx < b.size; bx++) {
+            if (w.inBounds(b.x + bx, b.y + by)) served.push(w.idx(b.x + bx, b.y + by));
+          }
+        }
+      }
+    }
+    return { roads, served, range };
   }
 
   private findYardWith(from: Building, good: GoodId, min: number): number {
@@ -553,14 +855,20 @@ export class Systems {
     const name = city.def(b).name;
     city.demolish(b.x, b.y);
     city.pushMessage('Fire!', `A ${name.toLowerCase()} has burned to the ground.`, 'bad', tile);
-    // Fire spreads to close neighbours.
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
+    // Fire leaves its immediate neighbours dangerous, but does not light them.
+    //
+    // The wider, harder version of this — a five-by-five splash that pushed every
+    // neighbour past the ignition threshold — compounded at better than one new fire
+    // per fire and took a district to bare ground inside a year with nothing the player
+    // could do about it. A fire should be a crisis you can still answer.
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
         const px = b.x + dx;
         const py = b.y + dy;
         if (!city.world.inBounds(px, py)) continue;
         const n = city.buildingAt(px, py);
-        if (n && city.rng.chance(0.18)) n.fire = Math.min(120, n.fire + 55);
+        if (n && city.rng.chance(0.25)) n.fire = Math.min(96, n.fire + 40);
       }
     }
   }

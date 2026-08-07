@@ -169,11 +169,15 @@ export class WalkerSystem {
     w.maxAge = (def.walkerRange ?? 20) * TICKS_PER_TILE * 3 + 400;
 
     if (w.kind === 'seller') {
-      // The seller carries a slice of the bazaar's stock out to the streets.
+      // The seller carries a real load, not a token one. A basket of twenty-four per
+      // good, leaving every couple of months, works out at well under what a district
+      // of eighty people eats — the bazaar would sit on full shelves while the houses
+      // around it reported no food, which is a supply chain that looks connected on
+      // the map and starves the city anyway.
       for (const g of [...FOOD_IDS, ...HOUSEHOLD_GOODS]) {
         const have = b.store[g] ?? 0;
         if (have <= 0) continue;
-        const take = Math.min(have, 24);
+        const take = Math.min(have, 60);
         b.store[g] = have - take;
         w.cargo[g] = take;
       }

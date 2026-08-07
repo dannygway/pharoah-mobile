@@ -54,11 +54,34 @@ export class Game {
   /** Set while a menu is open, so the sim halts without changing the player's speed. */
   suspended = false;
 
+  /**
+   * One level of undo, for the action just taken.
+   *
+   * Not a timeline rewind — that would break determinism and make mistakes free. It
+   * exists because a mis-tap on glass is common in a way a mis-click never was, and
+   * charging a player for a fat finger is a bad trade.
+   */
+  lastAction: { kind: 'place' | 'demolish'; tiles: { defId: string; x: number; y: number }[] } | null = null;
+  onUndoAvailable: ((label: string) => void) | null = null;
+
   /** Building armed for placement, or null. */
   armed: string | null = null;
   /** Tiles painted during the current drag. */
   private dragTiles: number[] = [];
   private dragStart = -1;
+
+  /**
+   * The city as it stood the last time the player actually looked at it.
+   *
+   * The simulation does not run while the app is closed, so "while you were away" means
+   * "since you last put the phone down" — the stretch of autosaved play a returning
+   * player has no memory of. That is the question the resume card has to answer, and
+   * answering it is not optional given how these sessions are shaped.
+   */
+  resumeMark: {
+    tick: number; population: number; funds: number;
+    buildings: number; monuments: number; lastMessageId: number;
+  } | null = null;
 
   /** Called whenever something happened the UI should redraw for. */
   onChange: (() => void) | null = null;
@@ -135,6 +158,7 @@ export class Game {
     this.city.pushMessage(m.name, m.brief, 'info');
     this.city.pushMessage('Advice', m.hint, 'info');
     this.city.markDirty();
+    this.markResumePoint();
   }
 
   private pendingRequests: (Mission['requests'][number] & { fired: boolean })[] = [];
@@ -409,31 +433,40 @@ export class Game {
     if (!this.armed) return;
     const armed = this.armed;
 
-    if (this.isPaintable(armed) && this.dragTiles.length > 0) {
-      let placed = 0;
-      for (const t of this.dragTiles) {
-        const x = this.world.xOf(t);
-        const y = this.world.yOf(t);
-        if (armed === DEMOLISH) {
-          if (this.city.demolish(x, y, true)) placed++;
-        } else if (this.city.place(armed, x, y) !== -1) {
-          placed++;
-        }
-      }
-      if (placed) {
-        armed === DEMOLISH ? this.audio.demolish() : this.audio.build();
-      } else {
-        this.audio.error();
-      }
-    } else if (this.scene.cursorTile >= 0) {
-      const x = this.world.xOf(this.scene.cursorTile);
-      const y = this.world.yOf(this.scene.cursorTile);
+    const done: { defId: string; x: number; y: number }[] = [];
+    const doTile = (t: number): void => {
+      const x = this.world.xOf(t);
+      const y = this.world.yOf(t);
       if (armed === DEMOLISH) {
-        this.city.demolish(x, y, true) ? this.audio.demolish() : this.audio.error();
-      } else {
-        const id = this.city.place(armed, x, y);
-        id !== -1 ? this.audio.build() : this.audio.error();
+        // Record what stood here before it goes, so undo has something to restore.
+        const id = this.world.building[this.world.idx(x, y)];
+        const prev = id >= 0 ? this.city.buildings[id] : null;
+        const wasRoad = this.world.road[this.world.idx(x, y)] === 1;
+        const record = prev ? { defId: prev.defId, x: prev.x, y: prev.y }
+          : wasRoad ? { defId: 'road', x, y } : null;
+        if (this.city.demolish(x, y, true) && record &&
+          !done.some((d) => d.x === record.x && d.y === record.y && d.defId === record.defId)) {
+          done.push(record);
+        }
+      } else if (this.city.place(armed, x, y) !== -1) {
+        done.push({ defId: armed, x, y });
       }
+    };
+
+    if (this.isPaintable(armed) && this.dragTiles.length > 0) {
+      for (const t of this.dragTiles) doTile(t);
+    } else if (this.scene.cursorTile >= 0) {
+      doTile(this.scene.cursorTile);
+    }
+
+    if (done.length) {
+      armed === DEMOLISH ? this.audio.demolish() : this.audio.build();
+      this.lastAction = { kind: armed === DEMOLISH ? 'demolish' : 'place', tiles: done };
+      const what = done.length > 1 ? `${done.length} structures`
+        : (BUILDING_BY_ID[done[0].defId]?.name ?? 'structure').toLowerCase();
+      this.onUndoAvailable?.(armed === DEMOLISH ? `Demolished ${what}` : `Placed ${what}`);
+    } else if (this.scene.cursorTile >= 0 || this.dragTiles.length) {
+      this.audio.error();
     }
 
     this.dragTiles = [];
@@ -441,6 +474,40 @@ export class Game {
     this.dragStart = -1;
     this.city.markDirty();
     this.onChange?.();
+  }
+
+  /**
+   * Reverse the last placement or demolition and return what it did, or null.
+   *
+   * A restored building comes back empty: its residents, stock and accumulated service
+   * coverage are gone with it. Undo covers the mis-tap, not the consequences of having
+   * genuinely knocked down a working district.
+   */
+  undoLast(): string | null {
+    const a = this.lastAction;
+    if (!a) return null;
+    this.lastAction = null;
+    if (a.kind === 'place') {
+      for (const t of a.tiles) {
+        const def = BUILDING_BY_ID[t.defId];
+        if (this.city.demolish(t.x, t.y, false) && def) {
+          // Return what was spent, less the small clearance charge demolish already took.
+          this.city.funds += def.cost;
+        }
+      }
+    } else {
+      for (const t of a.tiles) {
+        const def = BUILDING_BY_ID[t.defId];
+        // Placed free: the player already paid for these once and was refunded a
+        // quarter, so charging full price again would make undo a punishment.
+        if (this.city.place(t.defId, t.x, t.y, true) !== -1 && def) {
+          this.city.funds -= Math.floor(def.cost * 0.25);
+        }
+      }
+    }
+    this.city.markDirty();
+    this.onChange?.();
+    return a.kind;
   }
 
   private cancelDrag(): void {
@@ -475,6 +542,53 @@ export class Game {
 
   selectedBuilding(): Building | null {
     return this.scene.selected >= 0 ? this.city.buildings[this.scene.selected] ?? null : null;
+  }
+
+  /** Snapshot the present, to be compared against on the next resume. */
+  markResumePoint(): void {
+    const c = this.city;
+    this.resumeMark = {
+      tick: c.tick,
+      population: c.population,
+      funds: Math.round(c.funds),
+      buildings: c.liveBuildings.length,
+      monuments: c.liveBuildings.filter((i) => c.buildings[i]?.monument?.complete).length,
+      lastMessageId: c.messages[0]?.id ?? 0,
+    };
+  }
+
+  /**
+   * What changed since the mark, in plain language, or null when nothing did. Only the
+   * lines that carry information are returned — a card of six zeroes is worse than no
+   * card at all.
+   */
+  awaySummary(): { months: number; lines: [string, string, boolean][]; events: string[] } | null {
+    const m = this.resumeMark;
+    const c = this.city;
+    if (!m) return null;
+    const months = (c.tick - m.tick) / (TICKS_PER_YEAR / 12);
+    if (months < 1) return null;
+
+    const lines: [string, string, boolean][] = [];
+    const sign = (n: number) => (n > 0 ? `+${n}` : String(n));
+    const dPop = c.population - m.population;
+    if (dPop !== 0) lines.push(['Population', `${sign(dPop)} — now ${c.population}`, dPop < 0]);
+    const dFunds = Math.round(c.funds) - m.funds;
+    if (dFunds !== 0) lines.push(['Treasury', `${sign(dFunds)} deben — now ${Math.round(c.funds)}`, c.funds < 0]);
+    const dBuild = c.liveBuildings.length - m.buildings;
+    if (dBuild < 0) lines.push(['Buildings lost', String(-dBuild), true]);
+    const nMon = c.liveBuildings.filter((i) => c.buildings[i]?.monument?.complete).length;
+    if (nMon > m.monuments) lines.push(['Monuments finished', String(nMon - m.monuments), false]);
+    const pending = c.requests.filter((r) => r.resolved === 'pending').length;
+    if (pending) lines.push(['Requests outstanding', String(pending), true]);
+
+    const events = c.messages
+      .filter((msg) => msg.id > m.lastMessageId && msg.kind !== 'info')
+      .slice(0, 6)
+      .map((msg) => msg.title);
+
+    if (!lines.length && !events.length) return null;
+    return { months, lines, events };
   }
 
   centreOnTile(tile: number): void {
@@ -546,6 +660,7 @@ export class Game {
         festival: this.systems.festival,
       },
       pendingRequests: this.pendingRequests,
+      resumeMark: this.resumeMark,
       camera: {
         x: this.scene.camera.tx, y: this.scene.camera.ty, zoom: this.scene.camera.tzoom,
       },
@@ -613,6 +728,7 @@ export class Game {
       this.systems.tradeLimit = data.systems?.tradeLimit ?? {};
       this.systems.festival = data.systems?.festival ?? null;
       this.pendingRequests = data.pendingRequests ?? [];
+      this.resumeMark = data.resumeMark ?? null;
       this.status = data.status ?? 'playing';
       this.speedIndex = data.speedIndex ?? 1;
 

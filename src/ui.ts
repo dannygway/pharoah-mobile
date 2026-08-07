@@ -71,6 +71,7 @@ export class UI {
   private sheetBody!: HTMLElement;
   private sheetTitle!: HTMLElement;
   private card!: HTMLElement;
+  private chips!: HTMLElement;
   private toastWrap!: HTMLElement;
   private modal!: HTMLElement;
   private minimap!: HTMLCanvasElement;
@@ -81,6 +82,11 @@ export class UI {
   private activeCategory: BuildCategory | null = null;
   private lastMessageId = 0;
   private minimapTimer = 0;
+  /** Previous readings, so every metric can show a direction rather than a bare number. */
+  private lastFlood = 0;
+  private lastSentiment = 60;
+  private problemCount = 0;
+  private problemTimer = 0;
 
   onNewGame: ((missionId: string) => void) | null = null;
   onLoadGame: ((slot: string) => void) | null = null;
@@ -94,6 +100,32 @@ export class UI {
     game.onInspect = (id) => {
       if (id >= 0) this.openBuildingDetail(id);
     };
+    game.onUndoAvailable = (label) => this.showUndo(label);
+  }
+
+  /**
+   * The undo affordance: a toast with a button, for a few seconds after the action.
+   * Deliberately transient — an undo that lingers invites a player to treat the city
+   * as reversible, which it is not.
+   */
+  private showUndo(label: string): void {
+    const existing = this.toastWrap.querySelector('.toast.undo');
+    if (existing) existing.remove();
+    const t = el('div', { class: 'toast undo' },
+      el('div', { class: 'tt' }, label),
+      el('button', {
+        class: 'undo-btn',
+        onclick: () => {
+          this.game.undoLast();
+          this.game.audio.demolish();
+          t.remove();
+        },
+      }, 'Undo'));
+    this.toastWrap.appendChild(t);
+    setTimeout(() => {
+      t.classList.add('out');
+      setTimeout(() => t.remove(), 400);
+    }, 5000);
   }
 
   // -------------------------------------------------------------------------
@@ -109,6 +141,7 @@ export class UI {
     this.minimapWrap.addEventListener('pointerdown', (e) => this.minimapJump(e));
 
     this.card = el('div', { class: 'card hidden' });
+    this.chips = el('div', { class: 'mode-chips' });
     this.toastWrap = el('div', { class: 'toasts' });
 
     this.sheetTitle = el('div', { class: 'sheet-title' });
@@ -123,7 +156,7 @@ export class UI {
     this.modal = el('div', { class: 'modal hidden' });
 
     this.root.append(
-      this.topBar, this.goalsPanel, this.minimapWrap, this.card,
+      this.topBar, this.goalsPanel, this.minimapWrap, this.chips, this.card,
       this.toastWrap, this.sheet, this.bottomBar, this.modal,
     );
 
@@ -171,8 +204,35 @@ export class UI {
   // Refresh
   // -------------------------------------------------------------------------
 
+  /**
+   * A persistent chip for every mode the world is currently being drawn in, each with a
+   * one-tap dismiss. Without this a player who left an overlay on ten minutes ago is
+   * looking at a recoloured city and no longer remembers why.
+   */
+  private refreshChips(): void {
+    clear(this.chips);
+    const sc = this.game.scene;
+    if (sc.overlay !== 'none') {
+      const name = OVERLAYS.find((o) => o.id === sc.overlay)?.name ?? sc.overlay;
+      this.chips.append(el('button', {
+        class: 'mode-chip',
+        onclick: () => { this.game.setOverlay('none'); },
+      }, `${name} ✕`));
+    }
+    if (sc.halo) {
+      const b = this.game.city.buildings[sc.halo.building];
+      const name = b ? BUILDING_BY_ID[b.defId].name : 'Walker';
+      this.chips.append(el('button', {
+        class: 'mode-chip halo',
+        onclick: () => { sc.halo = null; this.refresh(); },
+      }, `${name} reach · ${sc.halo.range} tiles ✕`));
+    }
+    this.root.classList.toggle('has-chips', this.chips.childElementCount > 0);
+  }
+
   refresh(): void {
     this.refreshTopBar();
+    this.refreshChips();
     this.refreshCard();
     this.refreshGoals();
     this.refreshToasts();
@@ -199,6 +259,23 @@ export class UI {
     if (fundsEl) fundsEl.textContent = money(c.funds);
     const popEl = this.topBar.querySelector('.pop .v');
     if (popEl) popEl.textContent = String(c.population);
+
+    // The fault count drives the most accessible control on the screen, so it has to be
+    // live — but it is a sweep over every building, so it runs on its own slow cadence.
+    this.problemTimer += dt;
+    if (this.problemTimer > 2) {
+      this.problemTimer = 0;
+      const n = this.game.systems.cityProblems(40).length;
+      if (n !== this.problemCount) {
+        this.problemCount = n;
+        const chip = this.topBar.querySelector('.strip.probs');
+        if (chip) {
+          chip.textContent = n ? `⚠ ${n}` : '✓ 0';
+          chip.classList.toggle('bad', n > 0);
+          chip.classList.toggle('ok', n === 0);
+        }
+      }
+    }
 
     this.minimapTimer += dt;
     if (this.minimapTimer > 0.5 && !this.minimapWrap.classList.contains('hidden')) {
@@ -237,6 +314,31 @@ export class UI {
         el('span', { class: 'pv', style: { color: col } }, String(Math.round(v)))));
     }
 
+    // The status strip. Every reading is a number and a band together — a novice reads
+    // the band, an expert reads the number — and each carries a direction, because a
+    // city is a process and a single figure never says which way it is going.
+    const nileDir = c.floodLevel > this.lastFlood + 0.002 ? '▲'
+      : c.floodLevel < this.lastFlood - 0.002 ? '▼' : '▬';
+    const moodDir = c.sentiment > this.lastSentiment + 0.3 ? '▲'
+      : c.sentiment < this.lastSentiment - 0.3 ? '▼' : '▬';
+    const probs = this.problemCount;
+    const rowThree = el('div', { class: 'tb-row three' },
+      el('button', {
+        class: 'strip nile', 'aria-label': 'Nilometer',
+        onclick: () => this.openNilometer(),
+      }, `💧 ${Math.round(c.floodLevel * 100)}% ${nileDir} ${this.nileBand()}`),
+      el('button', {
+        class: `strip mood ${c.sentiment < 40 ? 'bad' : ''}`, 'aria-label': 'City sentiment',
+        onclick: () => this.openSheet('advisors'),
+      }, `${this.moodGlyph()} ${Math.round(c.sentiment)} ${moodDir} ${c.sentimentBand}`),
+      el('button', {
+        class: `strip probs ${probs ? 'bad' : 'ok'}`, 'aria-label': 'Problems overlay',
+        onclick: () => {
+          this.game.setOverlay(this.game.scene.overlay === 'problems' ? 'none' : 'problems');
+          this.game.audio.tap();
+        },
+      }, probs ? `⚠ ${probs}` : '✓ 0'));
+
     const paused = this.game.speedIndex === 0;
     const rowTwo = el('div', { class: 'tb-row two' },
       ratings,
@@ -262,7 +364,44 @@ export class UI {
           },
         }, `${SPEEDS[Math.max(1, this.game.speedIndex)]}×`)));
 
-    this.topBar.append(rowOne, rowTwo);
+    this.topBar.append(rowOne, rowThree, rowTwo);
+    this.lastFlood = c.floodLevel;
+    this.lastSentiment = c.sentiment;
+  }
+
+  /**
+   * The Nilometer. A number alone does not tell a player whether to worry, and the
+   * whole agricultural year turns on this one reading, so it gets a name as well.
+   */
+  private nileBand(): string {
+    const c = this.game.city;
+    if (c.season === 'akhet') {
+      const l = c.floodLevel;
+      return l < 0.25 ? 'feeble' : l < 0.5 ? 'low' : l < 0.78 ? 'good' : l < 0.94 ? 'strong' : 'in spate';
+    }
+    const q = c.floodQuality;
+    return q < 0.35 ? 'poor silt' : q < 0.6 ? 'thin silt' : q < 0.85 ? 'good silt' : 'rich silt';
+  }
+
+  private moodGlyph(): string {
+    const s = this.game.city.sentiment;
+    return s > 75 ? '😀' : s > 55 ? '🙂' : s > 40 ? '😐' : s > 22 ? '😟' : '😠';
+  }
+
+  private openNilometer(): void {
+    const c = this.game.city;
+    const body = el('div', { class: 'detail' });
+    body.append(
+      el('p', { class: 'desc' }, 'The Nilometer measures the inundation. Everything your farms will yield this year was decided by how high the water rose and how much silt it left behind.'),
+      row('Water level now', `${Math.round(c.floodLevel * 100)}% — ${this.nileBand()}`),
+      row('Season', `${SEASONS[c.season].name} — ${SEASONS[c.season].desc}`),
+      row('Silt from the last flood', `${Math.round(c.floodQuality * 100)}%`,
+        c.floodQuality < 0.45 ? 'warn' : ''),
+      row('Expected next flood', `${Math.round(c.nextFloodQuality * 100)}%`,
+        c.nextFloodQuality < 0.45 ? 'warn' : ''),
+    );
+    body.append(el('p', { class: 'hint' }, 'A flood that is too low leaves no silt and the fields go thin. One that is too high drowns what stands on the floodplain. Osiris decides which you get, so keep him content.'));
+    this.openSheetCustom('Nilometer', body);
   }
 
   private refreshGoals(): void {
@@ -359,8 +498,24 @@ export class UI {
       if (b.damage > 10) body.append(row('Damage', `${Math.round(b.damage)}%`, b.damage > 60 ? 'warn' : ''));
     }
 
+    if (b.monument && !b.monument.complete) {
+      const stall = this.game.systems.monumentStall(b);
+      if (stall) body.append(el('div', { class: 'blocker' }, stall));
+    }
+
+    const canHalo = !!def.walkerRange;
+    const haloOn = this.game.scene.halo?.building === b.id;
     const actions = el('div', { class: 'card-actions' },
       el('button', { onclick: () => this.openBuildingDetail(b.id) }, 'Details'),
+      canHalo ? el('button', {
+        class: haloOn ? 'armed' : '',
+        onclick: () => {
+          this.game.scene.setHalo(this.game.city, this.game.systems, b.id);
+          this.game.audio.tap();
+          this.refresh();
+        },
+      }, haloOn ? 'Hide reach' : 'Show reach') : null,
+      def.storage ? el('button', { onclick: () => this.openOrders(b.id) }, 'Orders') : null,
       def.workers > 0 || def.produces ? el('button', {
         onclick: () => { b.enabled = !b.enabled; this.refresh(); },
       }, b.enabled ? 'Mothball' : 'Reopen') : null,
@@ -376,6 +531,91 @@ export class UI {
       }, 'Demolish'));
 
     this.card.append(head, body, actions);
+  }
+
+  /**
+   * Storage orders. Desktop puts every good in a grid of cycling buttons and expects a
+   * mouse; on a phone the same capability becomes a grouped, filterable list with
+   * targets big enough to hit, plus presets, because in practice almost every yard is
+   * set to one of three or four patterns and the presets remove most of the tapping.
+   *
+   * The behaviour is unchanged — only its presentation is.
+   */
+  private openOrders(buildingId: number): void {
+    const c = this.game.city;
+    const b = c.buildings[buildingId];
+    if (!b) return;
+    const def = BUILDING_BY_ID[b.defId];
+    b.orders = b.orders ?? {};
+
+    const isGranary = def.id === 'granary';
+    const groups: [string, GoodId[]][] = isGranary
+      ? [['Food', FOOD_IDS]]
+      : [
+        ['Food', FOOD_IDS],
+        ['Raw materials', ['clay', 'reeds', 'straw', 'flax', 'timber', 'copper', 'gold', 'gems']],
+        ['Monument materials', ['limestone', 'sandstone', 'granite', 'bricks']],
+        ['Manufactured goods', ['pottery', 'linen', 'beer', 'papyrus', 'luxury', 'chests']],
+        ['Military', ['weapons', 'chariots']],
+      ];
+
+    const body = el('div', { class: 'orders' });
+    const listWrap = el('div', {});
+    let filter = '';
+
+    const render = () => {
+      clear(listWrap);
+      const used = Object.values(b.store).reduce((a: number, v) => a + (v ?? 0), 0);
+      listWrap.append(el('p', { class: 'hint' },
+        `Holding ${Math.floor(used)} of ${def.storage}. Accept lets carts deliver here; Get sends carts out to fetch; Reject turns deliveries away.`));
+
+      for (const [title, ids] of groups) {
+        const shown = ids.filter((g) => !filter || GOODS[g].name.toLowerCase().includes(filter));
+        if (!shown.length) continue;
+        listWrap.append(el('h4', {}, title));
+        for (const g of shown) {
+          const cur = b.orders![g] ?? 'accept';
+          const seg = el('div', { class: 'seg' });
+          for (const [val, label] of [['refuse', 'Reject'], ['accept', 'Accept'], ['get', 'Get']] as const) {
+            seg.append(el('button', {
+              class: `sg ${cur === val ? 'on' : ''}`,
+              onclick: () => { b.orders![g] = val; render(); },
+            }, label));
+          }
+          listWrap.append(el('div', { class: 'order-row' },
+            el('div', { class: 'or-name' },
+              el('span', { class: 'og' }, GOODS[g].glyph),
+              el('span', {}, GOODS[g].name),
+              el('span', { class: 'oq' }, String(Math.floor(b.store[g] ?? 0)))),
+            seg,
+            el('button', {
+              class: 'or-empty',
+              'aria-label': `Empty ${GOODS[g].name}`,
+              onclick: () => { b.orders![g] = 'empty'; render(); },
+            }, cur === 'empty' ? 'Emptying' : 'Empty')));
+        }
+      }
+    };
+
+    const all = groups.flatMap(([, ids]) => ids);
+    const preset = (label: string, order: 'accept' | 'refuse' | 'get' | 'empty') =>
+      el('button', {
+        class: 'chip',
+        onclick: () => { for (const g of all) b.orders![g] = order; render(); },
+      }, label);
+
+    const search = el('input', { type: 'search', class: 'search', placeholder: 'Find a good' }) as HTMLInputElement;
+    search.addEventListener('input', () => { filter = search.value.trim().toLowerCase(); render(); });
+
+    body.append(
+      el('div', { class: 'chip-grid' },
+        preset('Accept all', 'accept'), preset('Reject all', 'refuse'),
+        preset('Get all', 'get'), preset('Empty all', 'empty')),
+      search,
+      listWrap,
+    );
+    render();
+    this.openSheetCustom(`${def.name} — orders`, body);
   }
 
   private openBuildingDetail(id: number): void {
@@ -547,6 +787,10 @@ export class UI {
       this.sheetBody.appendChild(el('p', { class: 'hint' }, 'Nothing to report.'));
       return;
     }
+    this.sheetBody.appendChild(el('button', {
+      class: 'wide',
+      onclick: () => { if (!this.openAwaySummary()) this.game.audio.error(); },
+    }, 'While you were away'));
     const list = el('div', { class: 'msg-list' });
     for (const m of c.messages) {
       const item = el('div', { class: `msg ${m.kind} ${m.read ? '' : 'unread'}` },
@@ -575,10 +819,12 @@ export class UI {
     const tabs = el('div', { class: 'chip-grid' });
     const panel = el('div', { class: 'advisor-panel' });
     const names: [string, () => HTMLElement][] = [
+      ['Chief', () => this.advisorChief()],
       ['Overview', () => this.advisorOverview()],
       ['Labour', () => this.advisorLabour()],
       ['Population', () => this.advisorPopulation()],
       ['Religion', () => this.advisorReligion()],
+      ['Monuments', () => this.advisorMonuments()],
       ['Trade', () => this.advisorTrade()],
       ['Imperial', () => this.advisorImperial()],
       ['Military', () => this.advisorMilitary()],
@@ -596,6 +842,113 @@ export class UI {
     });
     this.sheetBody.append(tabs, panel);
     show(0);
+  }
+
+  /**
+   * The chief advisor. A player coming back to a city after two days does not want ten
+   * panels; they want to be told what broke. This is a ranked read over state the
+   * simulation already holds — no new mechanics — and every entry is one tap from the
+   * place it went wrong.
+   */
+  private advisorChief(): HTMLElement {
+    const c = this.game.city;
+    const box = el('div', {});
+    const problems = this.game.systems.cityProblems(24);
+    this.problemCount = problems.length;
+
+    box.append(el('div', { class: 'chief-mood' },
+      el('span', { class: 'cm-face' }, this.moodGlyph()),
+      el('div', {},
+        el('div', { class: 'cm-band' }, `${c.sentimentBand} · ${Math.round(c.sentiment)}`),
+        el('div', { class: 'cm-cause' }, c.sentimentCause))));
+
+    if (!problems.length) {
+      box.append(el('p', { class: 'hint' }, 'Nothing is wrong that I can see. The city is running itself.'));
+      return box;
+    }
+
+    box.append(el('h4', {}, problems.length <= 3 ? 'What needs your attention'
+      : `What needs your attention — ${problems.length} matters, worst first`));
+
+    for (const p of problems) {
+      const item = el('button', { class: `problem sev-${p.severity >= 85 ? 'hi' : p.severity >= 62 ? 'mid' : 'lo'}` },
+        el('div', { class: 'pt' }, p.title),
+        el('div', { class: 'pc' }, p.cause),
+        p.tile !== undefined || p.buildingId !== undefined
+          ? el('div', { class: 'pj' }, 'Tap to go there') : null);
+      item.addEventListener('click', () => {
+        if (p.buildingId !== undefined && c.buildings[p.buildingId]) {
+          const b = c.buildings[p.buildingId]!;
+          this.game.scene.selected = b.id;
+          this.game.centreOnTile(c.world.idx(b.x, b.y));
+          this.closeSheet();
+        } else if (p.tile !== undefined) {
+          this.game.centreOnTile(p.tile);
+          this.closeSheet();
+        }
+      });
+      box.append(item);
+    }
+
+    box.append(el('button', {
+      class: 'wide',
+      onclick: () => {
+        this.game.setOverlay('problems');
+        this.closeSheet();
+      },
+    }, 'Show every fault on the map'));
+    return box;
+  }
+
+  /**
+   * Monuments, with the blocking reason spelled out. A stalled monument is the single
+   * most opaque thing in the game: nothing visibly fails, work simply stops.
+   */
+  private advisorMonuments(): HTMLElement {
+    const c = this.game.city;
+    const sys = this.game.systems;
+    const box = el('div', {});
+    const sites = c.liveBuildings.map((i) => c.buildings[i]).filter((b) => b?.monument);
+    if (!sites.length) {
+      box.append(el('p', { class: 'hint' }, 'You have laid no monument. A monument needs a work camp for labour and the right guild to haul each material, before the first stone goes down.'));
+      return box;
+    }
+    for (const b of sites) {
+      if (!b?.monument) continue;
+      const def = BUILDING_BY_ID[b.defId];
+      const p = sys.monumentProgress(b);
+      const site = el('div', { class: 'mon-site' },
+        el('b', {}, def.name),
+        b.monument.complete
+          ? el('div', { class: 'mon-done' }, 'Complete. It will stand for three thousand years.')
+          : null);
+      if (!b.monument.complete) {
+        site.append(
+          row('Phase', `${p.stage} of ${p.total} — ${p.label}`),
+          bar(p.frac, '#c9a24a'),
+        );
+        const stage = def.monument!.stages[b.monument.stage];
+        for (const [g, need] of Object.entries(stage.materials)) {
+          const have = b.monument.delivered[g as GoodId] ?? 0;
+          site.append(row(GOODS[g as GoodId].name, `${Math.floor(have)} / ${need}`,
+            have < need ? 'warn' : ''));
+        }
+        site.append(row('Labour', `${Math.floor(b.monument.laborDone)} / ${stage.labor}`));
+        const stall = sys.monumentStall(b);
+        site.append(stall
+          ? el('div', { class: 'blocker' }, stall)
+          : el('div', { class: 'hint' }, 'Work is under way. Nothing is blocking it.'));
+      }
+      const go = el('button', { class: 'wide' }, 'Go to the site');
+      go.addEventListener('click', () => {
+        this.game.scene.selected = b.id;
+        this.game.centreOnTile(c.world.idx(b.x, b.y));
+        this.closeSheet();
+      });
+      site.append(go);
+      box.append(site);
+    }
+    return box;
   }
 
   private advisorOverview(): HTMLElement {
@@ -635,6 +988,41 @@ export class UI {
       row('Jobs needing workers', String(c.stats.workersNeeded)),
       row('Unemployed', String(c.stats.unemployed), c.stats.unemployed > c.workforce * 0.15 ? 'warn' : ''),
     );
+    if (c.scribes > 0) {
+      box.append(row('Scribes and their households', String(c.scribes)));
+      box.append(el('p', { class: 'hint' }, 'Once a house reaches manor, its residents stop working and pay a great deal more tax instead. A city of nothing but fine housing has no workforce left.'));
+    }
+    // Wages. Pay above the going rate and people come to you and stay; pay below it and
+    // the treasury holds, but they drift away and the ones who remain resent it.
+    const wage = el('input', {
+      type: 'range', min: '60', max: '160', step: '5',
+      value: String(Math.round(c.wageRate * 100)),
+    }) as HTMLInputElement;
+    const wageLabel = el('span', { class: 'v' }, `${Math.round(c.wageRate * 100)}%`);
+    const wageNote = el('p', { class: 'hint' }, '');
+    const describeWage = () => {
+      const r = c.wageRate;
+      wageNote.textContent = r > 1.18
+        ? 'Generous. People will move here for the work, and it is costing you every month.'
+        : r > 1.02 ? 'A little above the going rate. Immigration is helped.'
+        : r > 0.94 ? 'The going rate. Nobody thanks you and nobody complains.'
+        : r > 0.82 ? 'Below the going rate. Cheap, and quietly resented.'
+        : 'Well below the going rate. People are leaving over it.';
+    };
+    wage.addEventListener('input', () => {
+      c.wageRate = Number(wage.value) / 100;
+      wageLabel.textContent = `${wage.value}%`;
+      describeWage();
+    });
+    describeWage();
+    box.append(
+      el('h4', {}, 'Wages'),
+      el('div', { class: 'row' }, el('span', { class: 'k' }, 'Wage rate'), wage, wageLabel),
+      row('Wage bill', `${money(Math.round(c.employed * 0.10 * c.wageRate))} per month`),
+      wageNote,
+      el('h4', {}, 'Priority'),
+    );
+
     const list = el('div', { class: 'prio-list' });
     c.laborPriority.forEach((sector, i) => {
       list.appendChild(el('div', { class: 'prio' },
@@ -670,7 +1058,17 @@ export class UI {
       if (!b?.house || b.house.people === 0) continue;
       byLevel.set(b.house.level, (byLevel.get(b.house.level) ?? 0) + b.house.people);
     }
-    box.append(el('h4', {}, 'Where your people live'));
+    box.append(
+      el('h4', {}, 'Sentiment'),
+      el('div', { class: 'chief-mood' },
+        el('span', { class: 'cm-face' }, this.moodGlyph()),
+        el('div', {},
+          el('div', { class: 'cm-band' }, `${c.sentimentBand} · ${Math.round(c.sentiment)}`),
+          el('div', { class: 'cm-cause' }, c.sentimentCause))),
+      row('Arriving or leaving', c.stats.immigrationRate > 0.4 ? 'Arriving'
+        : c.stats.immigrationRate < -1.2 ? 'Leaving' : 'Settled'),
+      el('h4', {}, 'Where your people live'),
+    );
     if (!byLevel.size) {
       box.append(el('p', { class: 'hint' }, 'Nobody has settled yet. Lay roads and mark out housing.'));
       return box;
@@ -1009,6 +1407,45 @@ export class UI {
     this.showModal(body);
   }
 
+  /**
+   * "While you were away". Shown once on resuming a city, and available again from the
+   * message log. A returning player's first question is never "what are my ratings", it
+   * is "what broke", and until that is answered nothing else on the screen is readable.
+   */
+  openAwaySummary(): boolean {
+    const s = this.game.awaySummary();
+    if (!s) return false;
+    const body = el('div', { class: 'menu away' });
+    const span = s.months < 12
+      ? `${Math.round(s.months)} ${plural(Math.round(s.months), 'month')}`
+      : `${(s.months / 12).toFixed(1)} years`;
+    body.append(
+      el('h2', {}, 'While you were away'),
+      el('p', { class: 'sub' }, `${span} of ${this.game.mission.place} you did not watch.`),
+    );
+    for (const [k, v, bad] of s.lines) {
+      body.append(el('div', { class: `row ${bad ? 'warn' : ''}` },
+        el('span', { class: 'k' }, k), el('span', { class: 'v' }, v)));
+    }
+    if (s.events.length) {
+      body.append(el('h4', {}, 'What happened'));
+      for (const e of s.events) body.append(el('div', { class: 'away-ev' }, e));
+    }
+    const probs = this.game.systems.cityProblems(3);
+    if (probs.length) {
+      body.append(el('h4', {}, 'Where things stand now'));
+      for (const p of probs) {
+        body.append(el('div', { class: 'away-ev bad' }, `${p.title} — ${p.cause}`));
+      }
+    }
+    body.append(el('button', {
+      class: 'wide',
+      onclick: () => { this.game.markResumePoint(); this.closeModal(); },
+    }, 'Carry on'));
+    this.showModal(body);
+    return true;
+  }
+
   openMenu(): void {
     const g = this.game;
     g.suspended = true;
@@ -1160,7 +1597,13 @@ export class UI {
       el('h4', {}, 'Housing'),
       el('p', {}, 'Houses climb twenty levels. Each level wants more: water, then a second food, pottery, a god, a school, entertainment, medicine, linen, beer, jewellery. Select a house to see exactly what is blocking it.'),
       el('h4', {}, 'Monuments'),
-      el('p', {}, 'A monument needs work camps for labour and guilds to haul materials from your storage yards. It is built in stages; each stage needs both. Plan the quarries and the trade routes before you lay the first stone.'),
+      el('p', {}, 'A monument needs work camps for labour and guilds to haul materials from your storage yards. It is built in stages; each stage needs both. When one stalls, the Monuments advisor names the exact reason.'),
+      el('h4', {}, 'When something is wrong'),
+      el('p', {}, 'The ⚠ button in the top bar counts everything currently at fault and, tapped, paints every one of them on the map. The Advisors button opens with your chief advisor, who ranks the same list worst first and puts each entry one tap from the place it went wrong. Neither invents anything: they read the same city you are looking at.'),
+      el('h4', {}, 'Show reach'),
+      el('p', {}, 'Select any building that sends someone out — a bazaar, a temple, a well house, a firehouse — and tap Show reach. Every road tile that walker can still be standing on lights up blue, and every house those tiles touch lights up gold. If a house is not gold, that service will never arrive there, however many of the building you put up. This is the single most useful thing on the screen.'),
+      el('h4', {}, 'Wages and scribes'),
+      el('p', {}, 'Pay above the going rate and people move to you; pay below it and they drift away. And once a house reaches manor, its residents stop working and pay a great deal more tax instead — a city of nothing but fine housing has no workforce left to run it.'),
       el('button', { class: 'wide', onclick: () => this.openMenu() }, 'Back'),
     );
     this.showModal(body);
@@ -1203,6 +1646,7 @@ export class UI {
     game.onChange = () => this.refresh();
     game.onStatusChange = (s) => this.showOutcome(s);
     game.onInspect = (id) => { if (id >= 0) this.openBuildingDetail(id); };
+    game.onUndoAvailable = (label) => this.showUndo(label);
     this.activeCategory = null;
     this.sheetView = null;
     this.sheet.classList.add('hidden');

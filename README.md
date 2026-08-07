@@ -25,10 +25,15 @@ floodplain goes under water and every farm on it stops dead; you live on what is
 granary. When the water falls it leaves silt behind and fertility recovers, in proportion
 to how good the flood was — which Osiris decides based on how you have treated him.
 
-**Housing.** Twenty levels, from a crude hut to a palatial estate. Each rung demands more:
-water, a second food type, pottery, a god, a school, entertainment, medicine, linen, beer,
-jewellery, plus a desirability floor. Select any house and it tells you exactly what is
-blocking it. Houses devolve the moment a requirement lapses.
+**Housing.** Twenty levels, from a crude hut to a palatial estate, and each rung adds
+exactly one new demand to everything below it: water, then a food type, a god, a piped
+water supply, entertainment, pottery, a physician, beer, a magistrate, a school, a dentist,
+linen, a second god, a third kind of entertainment and a luxury, and on up. From manor
+level the residents become scribes: they stop working entirely and pay a great deal more
+tax instead, so a city of nothing but fine housing has no workforce left to run it. Select
+any house and it tells you exactly what is blocking it. Houses devolve the moment a
+requirement lapses, and a delivered service goes stale in about forty game days — which is
+what produces the characteristic slow oscillation of a marginal block.
 
 **Production chains.** Clay → pottery. Flax → linen. Barley → beer. Reeds → papyrus.
 Copper → weapons. Timber + copper → chariots. Gold + gems → jewellery. Farms deliver to
@@ -52,6 +57,43 @@ Pharaoh's requests, which you ignore at your peril.
 
 **Ten missions**, from a predynastic village at Nubt to Pi-Ramesses with the Hittites at
 the gate, plus an unlimited sandbox.
+
+---
+
+## Telling you what is wrong
+
+The desktop games in this lineage report state and leave diagnosis to the player. On a
+phone, with less screen and less patience, that is the wrong trade — so this build names
+the cause rather than the symptom. "Understaffed" is a symptom. "Its whole sector is being
+outbid" is a cause you can act on.
+
+**The reachability halo.** Select anything that sends a person out — a bazaar, a temple, a
+water supply, a firehouse — and tap **Show reach**. Every road tile that walker could still
+be standing on when its wander budget runs out lights up blue, and every house those tiles
+touch lights up gold. If a house is not gold, that service will never arrive there, no
+matter how many of the building you put up. It changes nothing in the simulation; it makes
+visible what an expert computes in their head and a novice never learns.
+
+**The Problems overlay and the chief advisor.** A single ⚠ button in the top bar counts
+everything currently at fault and, tapped, desaturates the city and paints every fault in
+one alert colour. The Advisors button opens on the chief advisor, which ranks the same
+list worst first — debt, famine, fire, invasion, labour, unrest, a god's anger, a stalled
+monument, a building with no road, a bazaar with nothing to sell — and puts every entry one
+tap from the place it went wrong. Both read the same `cityProblems()` call, so the map and
+the panel can never disagree.
+
+**Named stalls.** A stalled monument says which of the five things is missing: no source of
+the material, none reaching the site, no labourers, no guild, or workers outbid elsewhere.
+An empty venue says which school never sent it a performer.
+
+**Numbers and bands, with direction.** The Nilometer reads `40% ▲ good` and the sentiment
+chip reads `62 ▼ content`, with the dominant cause named beneath it in the advisor. A novice
+reads the band, an expert reads the number, and both get the trend.
+
+**While you were away.** Resuming a city opens on a card summarising what changed over the
+stretch you were not watching: population and treasury deltas, buildings lost, monuments
+advanced, requests outstanding, and the three things most wrong right now. Available again
+any time from the message log.
 
 ---
 
@@ -121,6 +163,10 @@ before it needs re-signing; a paid developer account lasts a year.
 | Lift finger | — | Place |
 | Press and hold | Full building details | Full building details |
 
+A mis-tap on glass is common in a way a mis-click never was, so placement and demolition
+each offer a single level of **undo** from a toast for five seconds afterwards. It is not a
+timeline rewind: a restored building comes back empty, without its residents or its stock.
+
 Roads, walls, gardens and housing drag out in a run — roads snap to an L-shape from where
 you started, which is far easier to control with a thumb than a freehand trail.
 
@@ -134,30 +180,38 @@ npm run dev          # vite dev server on :5173, host-exposed for device testing
 npm run typecheck    # tsc --noEmit
 npm run build        # icons + vite build + service-worker precache manifest
 npm run smoke        # headless browser test: boots, builds a city, runs it, asserts
+npm run standalone   # fold the whole build into one self-contained index.html
 ```
 
 `npm run smoke` is the real safety net. It serves the production build to a headless
 Chromium at iPhone dimensions, builds a working district programmatically, runs several
 simulated years, and asserts that people arrive, walkers spawn, services reach houses,
-housing evolves, food reaches households, and save/load round-trips — then writes
+housing evolves, food reaches households, and save/load round-trips — then exercises the
+diagnostic UI (status strip, chief advisor, reachability halo, storage orders) and writes
 `smoke-city.png` so you can look at it.
+
+When the ladder stalls it prints why: the blocker distribution per housing level, the
+ranked fault list, and the state of every link in the food chain. A bare "never got past
+level 2" sends the next reader hunting through the simulation for a bug that may not be
+there.
 
 ### Layout
 
 | File | What lives there |
 | --- | --- |
 | `src/core.ts` | Seeded RNG, noise, math, event bus |
+| `src/consts.ts` | Timing: ticks per month, days per month, service decay window |
 | `src/data.ts` | Goods, gods, the 20-level housing ladder, the building catalogue |
 | `src/world.ts` | Terrain generation, the river, tile state, road pathfinding |
 | `src/sim.ts` | The city: buildings, labour, production, housing evolution, the tick |
 | `src/walkers.ts` | The walker system — roaming service, carts, buyers, immigrants, combat |
-| `src/systems.ts` | Logistics, monuments, religion, trade, war, disasters, ratings |
+| `src/systems.ts` | Logistics, monuments, religion, trade, war, disasters, ratings, diagnosis |
 | `src/atlas.ts` | Every sprite in the game, drawn procedurally at boot |
 | `src/gl.ts` | WebGL2 instanced sprite batcher — one texture, one draw call |
-| `src/scene.ts` | Isometric camera, painter's-order draw pass, data overlays |
+| `src/scene.ts` | Isometric camera, painter's-order draw pass, overlays, reachability halo |
 | `src/input.ts` | Touch gesture grammar |
 | `src/audio.ts` | Procedural ambience, generative score, effects |
-| `src/ui.ts` | HUD, build menu, advisors, panels, minimap |
+| `src/ui.ts` | HUD, build menu, advisors, panels, minimap, storage orders |
 | `src/game.ts` | Loop, build interaction, mission goals, saving |
 | `src/missions.ts` | The campaign |
 

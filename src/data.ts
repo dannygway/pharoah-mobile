@@ -16,7 +16,7 @@ export type GoodId =
   | 'clay' | 'reeds' | 'straw' | 'flax' | 'timber' | 'copper' | 'gold' | 'gems'
   | 'limestone' | 'sandstone' | 'granite' | 'bricks'
   // manufactured
-  | 'pottery' | 'linen' | 'beer' | 'papyrus' | 'luxury' | 'weapons' | 'chariots';
+  | 'pottery' | 'linen' | 'beer' | 'papyrus' | 'luxury' | 'chests' | 'weapons' | 'chariots';
 
 export interface GoodDef {
   id: GoodId;
@@ -54,13 +54,14 @@ export const GOODS: Record<GoodId, GoodDef> = {
   beer:       { id: 'beer',       name: 'Beer',       kind: 'good', value: 48,  glyph: '🍺', color: '#c99a3e' },
   papyrus:    { id: 'papyrus',    name: 'Papyrus',    kind: 'good', value: 50,  glyph: '📜', color: '#ded2a6' },
   luxury:     { id: 'luxury',     name: 'Luxury Goods', kind: 'good', value: 120, glyph: '💍', color: '#dcc04a' },
+  chests:     { id: 'chests',     name: 'Luxury Chests', kind: 'good', value: 150, glyph: '🧰', color: '#a8823c' },
   weapons:    { id: 'weapons',    name: 'Weapons',    kind: 'good', value: 100, glyph: '⚔️', color: '#9aa2a8' },
   chariots:   { id: 'chariots',   name: 'Chariots',   kind: 'good', value: 160, glyph: '🛞', color: '#8a6a44' },
 };
 
 export const FOOD_IDS: GoodId[] = ['grain', 'vegetables', 'fruit', 'meat', 'fish'];
 /** Goods a household consumes, in the order houses come to want them. */
-export const HOUSEHOLD_GOODS: GoodId[] = ['pottery', 'linen', 'beer', 'luxury'];
+export const HOUSEHOLD_GOODS: GoodId[] = ['pottery', 'linen', 'beer', 'luxury', 'chests'];
 export const ALL_GOOD_IDS = Object.keys(GOODS) as GoodId[];
 
 // ---------------------------------------------------------------------------
@@ -145,54 +146,77 @@ export interface HousingLevel {
   name: string;
   /** People housed per house tile at this level. */
   capacity: number;
-  /** Minimum desirability to evolve to this level. */
+  /** Minimum desirability to hold this level. */
   desirability: number;
   /** Maximum desirability before the house feels out of place and devolves. */
   desirabilityMax: number;
-  /** 0 = none, 1 = well, 2 = water supply. */
+  /** 0 = none, 1 = a well will do, 2 = a water supply specifically. */
   water: 0 | 1 | 2;
   /** Distinct food types required in the house. */
   foodTypes: number;
   /** Number of different gods that must have visited. */
   gods: number;
-  /** Household goods required, as a prefix of HOUSEHOLD_GOODS. */
-  goods: number;
-  education: 0 | 1 | 2 | 3; // 0 none, 1 school, 2 library, 3 both
-  entertainment: 0 | 1 | 2 | 3 | 4; // booth, bandstand, pavilion, senet
-  health: 0 | 1 | 2 | 3 | 4; // apothecary, physician, dentist, mortuary
+  /** Household goods required by name, cumulative. */
+  goods: GoodId[];
+  /** 0 = none, 1 = school or library, 2 = school and library. */
+  education: 0 | 1 | 2;
+  /** Distinct entertainment types, not venue count. */
+  entertainment: number;
+  /** 0 none, 1 physician-or-mortuary, 2 that plus a dentist, 3 physician and mortuary and dentist. */
+  health: 0 | 1 | 2 | 3;
+  /** Requires a magistrate to have called. */
+  magistrate: boolean;
+  /**
+   * From Common Manor upward the residents are scribes: they pay far more tax and lift
+   * culture, but they stop working. Evolving a whole city to manor level without
+   * planning for the labour loss is a classic self-inflicted collapse.
+   */
+  scribes: boolean;
   /** Monthly tax yield per person at this level. */
   taxPerPerson: number;
   /** Contribution to the Prosperity rating. */
   prosperity: number;
 }
 
+const NO_GOODS: GoodId[] = [];
+const G_POT: GoodId[] = ['pottery'];
+const G_POT_BEER: GoodId[] = ['pottery', 'beer'];
+const G_POT_BEER_LIN: GoodId[] = ['pottery', 'beer', 'linen'];
+const G_ALL: GoodId[] = ['pottery', 'beer', 'linen', 'luxury'];
+const G_ALL2: GoodId[] = ['pottery', 'beer', 'linen', 'luxury', 'chests'];
+
 /**
- * The twenty-rung ladder. Requirements ratchet in the classic order: shelter, then
- * water, then a second food, pottery, a god, education, entertainment, medicine,
- * and finally the luxuries that only a great city can supply.
+ * The twenty-rung ladder, with one new requirement introduced per step and every
+ * earlier requirement carried forward permanently. A Palatial Estate needs all of it,
+ * continuously, or it falls.
+ *
+ * Deviation from the reference design, stated plainly: houses here do not grow their
+ * footprint (1x1 to 2x2 to 3x3 to 4x4) by absorbing neighbours. That merge behaviour
+ * is a large change to placement and rendering; instead every house stays 1x1 and the
+ * per-tile capacity ramps to compensate. The requirement ladder itself is faithful.
  */
 export const HOUSING: HousingLevel[] = [
-  { level: 0,  name: 'Empty Lot',          capacity: 0,  desirability: -99, desirabilityMax: 999, water: 0, foodTypes: 0, gods: 0, goods: 0, education: 0, entertainment: 0, health: 0, taxPerPerson: 0,    prosperity: 0 },
-  { level: 1,  name: 'Crude Hut',          capacity: 5,  desirability: -20, desirabilityMax: 12,  water: 0, foodTypes: 0, gods: 0, goods: 0, education: 0, entertainment: 0, health: 0, taxPerPerson: 0.10, prosperity: 0 },
-  { level: 2,  name: 'Sturdy Hut',         capacity: 7,  desirability: -14, desirabilityMax: 18,  water: 0, foodTypes: 1, gods: 0, goods: 0, education: 0, entertainment: 0, health: 0, taxPerPerson: 0.14, prosperity: 2 },
-  { level: 3,  name: 'Meager Shanty',      capacity: 9,  desirability: -10, desirabilityMax: 24,  water: 1, foodTypes: 1, gods: 0, goods: 0, education: 0, entertainment: 0, health: 0, taxPerPerson: 0.18, prosperity: 5 },
-  { level: 4,  name: 'Common Shanty',      capacity: 11, desirability: -6,  desirabilityMax: 30,  water: 1, foodTypes: 1, gods: 1, goods: 0, education: 0, entertainment: 0, health: 0, taxPerPerson: 0.22, prosperity: 8 },
-  { level: 5,  name: 'Rough Cottage',      capacity: 13, desirability: -2,  desirabilityMax: 36,  water: 1, foodTypes: 1, gods: 1, goods: 1, education: 0, entertainment: 0, health: 0, taxPerPerson: 0.28, prosperity: 11 },
-  { level: 6,  name: 'Ordinary Cottage',   capacity: 15, desirability: 2,   desirabilityMax: 42,  water: 1, foodTypes: 2, gods: 1, goods: 1, education: 1, entertainment: 0, health: 0, taxPerPerson: 0.34, prosperity: 14 },
-  { level: 7,  name: 'Modest Homestead',   capacity: 17, desirability: 6,   desirabilityMax: 48,  water: 1, foodTypes: 2, gods: 1, goods: 1, education: 1, entertainment: 1, health: 0, taxPerPerson: 0.42, prosperity: 18 },
-  { level: 8,  name: 'Spacious Homestead', capacity: 19, desirability: 10,  desirabilityMax: 54,  water: 2, foodTypes: 2, gods: 2, goods: 1, education: 1, entertainment: 1, health: 1, taxPerPerson: 0.50, prosperity: 22 },
-  { level: 9,  name: 'Modest Apartment',   capacity: 21, desirability: 14,  desirabilityMax: 60,  water: 2, foodTypes: 2, gods: 2, goods: 2, education: 1, entertainment: 1, health: 1, taxPerPerson: 0.60, prosperity: 26 },
-  { level: 10, name: 'Spacious Apartment', capacity: 23, desirability: 18,  desirabilityMax: 66,  water: 2, foodTypes: 2, gods: 2, goods: 2, education: 2, entertainment: 2, health: 1, taxPerPerson: 0.70, prosperity: 31 },
-  { level: 11, name: 'Common Residence',   capacity: 26, desirability: 22,  desirabilityMax: 72,  water: 2, foodTypes: 3, gods: 3, goods: 2, education: 2, entertainment: 2, health: 2, taxPerPerson: 0.82, prosperity: 36 },
-  { level: 12, name: 'Spacious Residence', capacity: 29, desirability: 26,  desirabilityMax: 78,  water: 2, foodTypes: 3, gods: 3, goods: 3, education: 2, entertainment: 2, health: 2, taxPerPerson: 0.95, prosperity: 42 },
-  { level: 13, name: 'Elegant Residence',  capacity: 32, desirability: 31,  desirabilityMax: 84,  water: 2, foodTypes: 3, gods: 3, goods: 3, education: 3, entertainment: 3, health: 2, taxPerPerson: 1.10, prosperity: 48 },
-  { level: 14, name: 'Fancy Residence',    capacity: 35, desirability: 36,  desirabilityMax: 90,  water: 2, foodTypes: 3, gods: 4, goods: 3, education: 3, entertainment: 3, health: 3, taxPerPerson: 1.28, prosperity: 55 },
-  { level: 15, name: 'Common Manor',       capacity: 38, desirability: 42,  desirabilityMax: 96,  water: 2, foodTypes: 3, gods: 4, goods: 4, education: 3, entertainment: 3, health: 3, taxPerPerson: 1.48, prosperity: 62 },
-  { level: 16, name: 'Spacious Manor',     capacity: 41, desirability: 48,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 4, goods: 4, education: 3, entertainment: 4, health: 3, taxPerPerson: 1.70, prosperity: 70 },
-  { level: 17, name: 'Elegant Manor',      capacity: 44, desirability: 54,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 5, goods: 4, education: 3, entertainment: 4, health: 4, taxPerPerson: 1.95, prosperity: 79 },
-  { level: 18, name: 'Stately Manor',      capacity: 47, desirability: 61,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 5, goods: 4, education: 3, entertainment: 4, health: 4, taxPerPerson: 2.25, prosperity: 88 },
-  { level: 19, name: 'Modest Estate',      capacity: 50, desirability: 68,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 5, goods: 4, education: 3, entertainment: 4, health: 4, taxPerPerson: 2.60, prosperity: 96 },
-  { level: 20, name: 'Palatial Estate',    capacity: 54, desirability: 76,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 5, goods: 4, education: 3, entertainment: 4, health: 4, taxPerPerson: 3.00, prosperity: 105 },
+  { level: 0,  name: 'Vacant Lot',          capacity: 0,   desirability: -99, desirabilityMax: 999, water: 0, foodTypes: 0, gods: 0, goods: NO_GOODS,      education: 0, entertainment: 0, health: 0, magistrate: false, scribes: false, taxPerPerson: 0,    prosperity: 0 },
+  { level: 1,  name: 'Crude Hut',           capacity: 6,   desirability: -22, desirabilityMax: 14,  water: 1, foodTypes: 0, gods: 0, goods: NO_GOODS,      education: 0, entertainment: 0, health: 0, magistrate: false, scribes: false, taxPerPerson: 0.10, prosperity: 0 },
+  { level: 2,  name: 'Sturdy Hut',          capacity: 8,   desirability: -18, desirabilityMax: 20,  water: 1, foodTypes: 1, gods: 0, goods: NO_GOODS,      education: 0, entertainment: 0, health: 0, magistrate: false, scribes: false, taxPerPerson: 0.14, prosperity: 3 },
+  { level: 3,  name: 'Meager Shanty',       capacity: 10,  desirability: -14, desirabilityMax: 26,  water: 1, foodTypes: 1, gods: 1, goods: NO_GOODS,      education: 0, entertainment: 0, health: 0, magistrate: false, scribes: false, taxPerPerson: 0.18, prosperity: 6 },
+  { level: 4,  name: 'Common Shanty',       capacity: 13,  desirability: -10, desirabilityMax: 32,  water: 2, foodTypes: 1, gods: 1, goods: NO_GOODS,      education: 0, entertainment: 0, health: 0, magistrate: false, scribes: false, taxPerPerson: 0.22, prosperity: 9 },
+  { level: 5,  name: 'Rough Cottage',       capacity: 16,  desirability: -6,  desirabilityMax: 38,  water: 2, foodTypes: 1, gods: 1, goods: NO_GOODS,      education: 0, entertainment: 1, health: 0, magistrate: false, scribes: false, taxPerPerson: 0.28, prosperity: 12 },
+  { level: 6,  name: 'Ordinary Cottage',    capacity: 20,  desirability: -2,  desirabilityMax: 44,  water: 2, foodTypes: 1, gods: 1, goods: G_POT,         education: 0, entertainment: 1, health: 0, magistrate: false, scribes: false, taxPerPerson: 0.34, prosperity: 16 },
+  { level: 7,  name: 'Modest Homestead',    capacity: 24,  desirability: 2,   desirabilityMax: 50,  water: 2, foodTypes: 1, gods: 1, goods: G_POT,         education: 0, entertainment: 2, health: 1, magistrate: false, scribes: false, taxPerPerson: 0.42, prosperity: 20 },
+  { level: 8,  name: 'Spacious Homestead',  capacity: 28,  desirability: 6,   desirabilityMax: 56,  water: 2, foodTypes: 1, gods: 1, goods: G_POT_BEER,    education: 0, entertainment: 2, health: 1, magistrate: false, scribes: false, taxPerPerson: 0.50, prosperity: 25 },
+  { level: 9,  name: 'Modest Apartment',    capacity: 32,  desirability: 10,  desirabilityMax: 62,  water: 2, foodTypes: 1, gods: 1, goods: G_POT_BEER,    education: 0, entertainment: 2, health: 1, magistrate: true,  scribes: false, taxPerPerson: 0.60, prosperity: 30 },
+  { level: 10, name: 'Spacious Apartment',  capacity: 36,  desirability: 14,  desirabilityMax: 68,  water: 2, foodTypes: 1, gods: 1, goods: G_POT_BEER,    education: 1, entertainment: 2, health: 1, magistrate: true,  scribes: false, taxPerPerson: 0.70, prosperity: 35 },
+  { level: 11, name: 'Common Residence',    capacity: 40,  desirability: 19,  desirabilityMax: 74,  water: 2, foodTypes: 2, gods: 1, goods: G_POT_BEER,    education: 1, entertainment: 2, health: 2, magistrate: true,  scribes: false, taxPerPerson: 0.82, prosperity: 41 },
+  { level: 12, name: 'Spacious Residence',  capacity: 44,  desirability: 24,  desirabilityMax: 80,  water: 2, foodTypes: 2, gods: 1, goods: G_POT_BEER_LIN, education: 1, entertainment: 2, health: 2, magistrate: true, scribes: false, taxPerPerson: 0.95, prosperity: 47 },
+  { level: 13, name: 'Elegant Residence',   capacity: 48,  desirability: 29,  desirabilityMax: 86,  water: 2, foodTypes: 2, gods: 2, goods: G_POT_BEER_LIN, education: 1, entertainment: 2, health: 2, magistrate: true, scribes: false, taxPerPerson: 1.10, prosperity: 54 },
+  { level: 14, name: 'Fancy Residence',     capacity: 52,  desirability: 34,  desirabilityMax: 92,  water: 2, foodTypes: 2, gods: 2, goods: G_ALL,         education: 1, entertainment: 3, health: 2, magistrate: true,  scribes: false, taxPerPerson: 1.28, prosperity: 62 },
+  { level: 15, name: 'Common Manor',        capacity: 58,  desirability: 40,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 2, goods: G_ALL,         education: 1, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 1.85, prosperity: 70 },
+  { level: 16, name: 'Spacious Manor',      capacity: 64,  desirability: 46,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL,         education: 2, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.15, prosperity: 79 },
+  { level: 17, name: 'Elegant Manor',       capacity: 70,  desirability: 53,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL,         education: 2, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.50, prosperity: 88 },
+  { level: 18, name: 'Stately Manor',       capacity: 76,  desirability: 60,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.90, prosperity: 97 },
+  { level: 19, name: 'Modest Estate',       capacity: 86,  desirability: 68,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 3.40, prosperity: 106 },
+  { level: 20, name: 'Palatial Estate',     capacity: 100, desirability: 76,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 4.00, prosperity: 118 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -204,7 +228,7 @@ export type BuildCategory =
   | 'religion' | 'culture' | 'government' | 'military' | 'monument' | 'trade';
 
 export type LaborSector =
-  | 'food' | 'industry' | 'distribution' | 'culture' | 'religion' | 'education'
+  | 'food' | 'safety' | 'industry' | 'distribution' | 'culture' | 'religion' | 'education'
   | 'health' | 'government' | 'military' | 'infrastructure' | 'monument' | 'trade';
 
 /** How the art generator should draw this building. */
@@ -266,6 +290,16 @@ export interface BuildingDef {
 
   /** Religion: which god this building honours. */
   god?: GodId;
+
+  /**
+   * Entertainment supply chain. A venue does not entertain anybody by itself: the
+   * school trains the performer and sends them to the venue. A pavilion with no dance
+   * school in range stands empty, which is one of the easiest traps in the genre to
+   * fall into and one of the hardest to diagnose without being told.
+   */
+  needsPerformerFrom?: string;
+  /** School side of the same link: the venue type this school staffs. */
+  performerFor?: string;
 
   /** Monument staging (see sim/monuments). */
   monument?: {
@@ -337,7 +371,7 @@ export const BUILDINGS: BuildingDef[] = [
     art: { style: 'stone', base: '#9a8e74', roof: '#6f6553', height: 8 },
   },
   {
-    id: 'water_supply', name: 'Water Supply', cat: 'water', size: 2, cost: 90, upkeep: 2, workers: 6,
+    id: 'water_supply', name: 'Water Supply', cat: 'water', size: 2, cost: 90, upkeep: 2, workers: 4,
     sector: 'infrastructure', needsRoad: true,
     desc: 'Water carriers walk the streets with jars. Required by anything grander than a shanty.',
     service: 'water', walkerRange: 26, walkerInterval: 240,
@@ -468,6 +502,14 @@ export const BUILDINGS: BuildingDef[] = [
     art: { style: 'mud', base: '#c9a94a', roof: '#8a7226', height: 13 },
   },
   {
+    id: 'cabinet_maker', name: 'Cabinet Maker', cat: 'industry', size: 2, cost: 130, upkeep: 5, workers: 10,
+    sector: 'industry', needsRoad: true,
+    desc: 'Inlaid chests of cedar and gold. Only a stately manor asks for them, and only a rich city can supply them.',
+    consumes: { timber: 8, gold: 5 }, produces: 'chests', produceQty: 5, cycleTicks: 860,
+    desirability: D(-3, 4, 2), fireRisk: 1.3,
+    art: { style: 'mud', base: '#a8823c', roof: '#6f5426', height: 13 },
+  },
+  {
     id: 'weaponsmith', name: 'Weaponsmith', cat: 'industry', size: 2, cost: 100, upkeep: 4, workers: 10,
     sector: 'industry', needsRoad: true,
     desc: 'Copper smelted into spearheads and axes. Arms your forts and pays your tribute.',
@@ -542,24 +584,24 @@ export const BUILDINGS: BuildingDef[] = [
 
   // ---------------- Distribution ----------------
   {
-    id: 'granary', name: 'Granary', cat: 'distribution', size: 3, cost: 100, upkeep: 3, workers: 8,
+    id: 'granary', name: 'Granary', cat: 'distribution', size: 3, cost: 100, upkeep: 3, workers: 5,
     sector: 'distribution', needsRoad: true,
     desc: 'Domed silos for the harvest. Farmers deliver here; bazaars draw from here.',
     storage: 3200, desirability: D(-4, 4, 2),
     art: { style: 'mud', base: '#c2a468', roof: '#9a7f45', height: 18 },
   },
   {
-    id: 'storage_yard', name: 'Storage Yard', cat: 'distribution', size: 3, cost: 90, upkeep: 3, workers: 8,
+    id: 'storage_yard', name: 'Storage Yard', cat: 'distribution', size: 3, cost: 90, upkeep: 3, workers: 6,
     sector: 'distribution', needsRoad: true,
     desc: 'Open stockpiles under matting. Holds everything that is not food.',
     storage: 1600, desirability: D(-6, 4, 2),
     art: { style: 'mud', base: '#a89272', roof: '#7d6a4e', height: 8 },
   },
   {
-    id: 'bazaar', name: 'Bazaar', cat: 'distribution', size: 2, cost: 60, upkeep: 3, workers: 8,
+    id: 'bazaar', name: 'Bazaar', cat: 'distribution', size: 2, cost: 60, upkeep: 3, workers: 5,
     sector: 'distribution', needsRoad: true,
     desc: 'Buyers fetch stock from your stores; sellers walk it to the doorstep of every house.',
-    walkerRange: 22, walkerInterval: 200,
+    walkerRange: 22, walkerInterval: 130,
     desirability: D(-2, 3, 1), fireRisk: 1.2,
     art: { style: 'reed', base: '#b5804a', roof: '#c9564a', height: 10 },
   },
@@ -575,7 +617,7 @@ export const BUILDINGS: BuildingDef[] = [
         art: { style: 'temple', base: '#c8bb95', roof: god.color, height: 14 },
       },
       {
-        id: `temple_${g}`, name: `Temple of ${god.name}`, cat: 'religion', size: 2, cost: 140, upkeep: 4, workers: 8,
+        id: `temple_${g}`, name: `Temple of ${god.name}`, cat: 'religion', size: 2, cost: 140, upkeep: 4, workers: 6,
         sector: 'religion', god: g, needsRoad: true,
         desc: `Priests of ${god.name} walk the streets bearing the god's favour to your households.`,
         service: RELIGION_SERVICE[g], walkerRange: 26, walkerInterval: 300,
@@ -625,24 +667,24 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'booth', name: 'Booth', cat: 'culture', size: 1, cost: 40, upkeep: 2, workers: 3,
     sector: 'culture', needsRoad: true,
-    desc: 'A juggler works the corner. Simple pleasure, and a requirement sooner than you think.',
-    service: 'booth', walkerRange: 20, walkerInterval: 260,
+    desc: 'A juggler works the corner. Needs a juggler school in range to supply the performer.',
+    service: 'booth', walkerRange: 20, walkerInterval: 260, needsPerformerFrom: 'juggler_school',
     desirability: D(3, 3, 1),
     art: { style: 'reed', base: '#b5804a', roof: '#d0a03f', height: 9 },
   },
   {
     id: 'bandstand', name: 'Bandstand', cat: 'culture', size: 2, cost: 90, upkeep: 4, workers: 6,
     sector: 'culture', needsRoad: true,
-    desc: 'Harp, flute and sistrum. Musicians tour the streets from here.',
-    service: 'bandstand', walkerRange: 26, walkerInterval: 280,
+    desc: 'Harp, flute and sistrum. A conservatory must send the musicians.',
+    service: 'bandstand', walkerRange: 26, walkerInterval: 280, needsPerformerFrom: 'conservatory',
     desirability: D(8, 5, 2),
     art: { style: 'reed', base: '#c0a76e', roof: '#4f8ab5', height: 12 },
   },
   {
     id: 'pavilion', name: 'Pavilion', cat: 'culture', size: 3, cost: 180, upkeep: 7, workers: 10,
     sector: 'culture', needsRoad: true,
-    desc: 'Dancers perform beneath a painted canopy. Great houses will not do without it.',
-    service: 'pavilion', walkerRange: 30, walkerInterval: 300,
+    desc: 'Dancers perform beneath a painted canopy, sent from a dance school.',
+    service: 'pavilion', walkerRange: 30, walkerInterval: 300, needsPerformerFrom: 'dance_school',
     desirability: D(16, 7, 2),
     art: { style: 'reed', base: '#cbb27c', roof: '#b04f7a', height: 16 },
   },
@@ -657,22 +699,22 @@ export const BUILDINGS: BuildingDef[] = [
   {
     id: 'juggler_school', name: 'Juggler School', cat: 'culture', size: 2, cost: 70, upkeep: 3, workers: 5,
     sector: 'culture', needsRoad: true,
-    desc: 'Trains the performers your booths need. Without it, booths stand idle.',
-    desirability: D(2, 3, 1),
+    desc: 'Trains jugglers and sends them to your booths. Without it, booths stand idle.',
+    performerFor: 'booth', desirability: D(2, 3, 1),
     art: { style: 'mud', base: '#b08a55', roof: '#7a5f38', height: 11 },
   },
   {
     id: 'conservatory', name: 'Conservatory', cat: 'culture', size: 2, cost: 120, upkeep: 5, workers: 6,
     sector: 'culture', needsRoad: true,
-    desc: 'Trains musicians for your bandstands.',
-    desirability: D(4, 4, 1),
+    desc: 'Trains musicians and sends them to your bandstands.',
+    performerFor: 'bandstand', desirability: D(4, 4, 1),
     art: { style: 'mud', base: '#b5a06a', roof: '#4f7fa5', height: 13 },
   },
   {
     id: 'dance_school', name: 'Dance School', cat: 'culture', size: 2, cost: 160, upkeep: 6, workers: 8,
     sector: 'culture', needsRoad: true,
-    desc: 'Trains dancers for your pavilions.',
-    desirability: D(5, 4, 1),
+    desc: 'Trains dancers and sends them to your pavilions.',
+    performerFor: 'pavilion', desirability: D(5, 4, 1),
     art: { style: 'mud', base: '#bda66f', roof: '#a04f70', height: 13 },
   },
   {
@@ -718,15 +760,15 @@ export const BUILDINGS: BuildingDef[] = [
     art: { style: 'mud', base: '#b59a63', roof: '#7a6338', height: 13 },
   },
   {
-    id: 'firehouse', name: 'Firehouse', cat: 'government', size: 1, cost: 50, upkeep: 3, workers: 6,
-    sector: 'government', needsRoad: true,
+    id: 'firehouse', name: 'Firehouse', cat: 'government', size: 1, cost: 50, upkeep: 3, workers: 5,
+    sector: 'safety', needsRoad: true,
     desc: 'Watchmen with water jars. Fire is the fastest way to lose a district you spent a decade building.',
     service: 'fire', walkerRange: 26, walkerInterval: 180,
     art: { style: 'mud', base: '#a8703f', roof: '#6f4526', height: 12 },
   },
   {
-    id: 'architect_post', name: "Architect's Post", cat: 'government', size: 1, cost: 60, upkeep: 3, workers: 6,
-    sector: 'government', needsRoad: true,
+    id: 'architect_post', name: "Architect's Post", cat: 'government', size: 1, cost: 60, upkeep: 3, workers: 5,
+    sector: 'safety', needsRoad: true,
     desc: 'Surveyors shore up sagging walls. Neglect this and buildings simply fall down.',
     service: 'architect', walkerRange: 26, walkerInterval: 180,
     art: { style: 'mud', base: '#9a8f6f', roof: '#665c42', height: 12 },

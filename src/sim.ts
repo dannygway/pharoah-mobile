@@ -9,10 +9,10 @@
 import { RNG, clamp, approach } from './core';
 import {
   BUILDING_BY_ID, BuildingDef, GOODS, GoodId, FOOD_IDS, HOUSEHOLD_GOODS, HOUSING,
-  ServiceId, GodId, GOD_IDS, RELIGION_SERVICE, LaborSector, seasonOfMonth, Season, MONTHS,
+  ServiceId, GodId, GOD_IDS, GODS, RELIGION_SERVICE, LaborSector, seasonOfMonth, Season, MONTHS,
 } from './data';
 import { World, Terrain } from './world';
-import { TICKS_PER_MONTH, TICKS_PER_YEAR, SERVICE_DURATION as SVC_TICKS } from './consts';
+import { TICKS_PER_MONTH, TICKS_PER_YEAR, TICKS_PER_DAY, SERVICE_DURATION as SVC_TICKS } from './consts';
 import { Walker, WalkerSystem } from './walkers';
 
 export { TICKS_PER_MONTH, TICKS_PER_YEAR, SERVICE_DURATION } from './consts';
@@ -79,8 +79,18 @@ export interface Building {
   house?: HouseState;
   monument?: MonumentState;
   garrison?: GarrisonState;
-  /** Storage yard / granary per-good policy. */
-  orders?: Partial<Record<GoodId, 'accept' | 'refuse'>>;
+  /**
+   * Storage yard / granary per-good policy.
+   *  accept — carts may deposit here
+   *  refuse — carts may not; existing stock is carried away
+   *  get    — this store actively sends carts to fetch the good from other stores
+   *  empty  — stock is removed and nothing new is accepted
+   * Setting a farm-side granary to accept and a housing-side granary to get is the
+   * foundational technique for moving food across a city without long bazaar trips.
+   */
+  orders?: Partial<Record<GoodId, 'accept' | 'refuse' | 'get' | 'empty'>>;
+  /** Entertainment venues hold a performer sent from their school; 0 means idle. */
+  performers?: number;
   /** Cosmetic seed so identical buildings do not look identical. */
   variant: number;
   /** Ticks the building has been standing, for gentle art variation. */
@@ -137,8 +147,18 @@ export interface Invasion {
 
 export type LaborPriority = LaborSector[];
 
+/**
+ * Who gets workers first when there are not enough to go round.
+ *
+ * Safety — the firehouse and the architect's post — sits second, above everything but
+ * food. It used to be lumped in with government, ninth of twelve, which meant that in
+ * any city short of labour the two services whose failure is *permanent* were the two
+ * that never got staffed: a district would burn to the ground while its bazaar and its
+ * temple ran at full strength. A player can still demote it; the default should not
+ * quietly guarantee the loss.
+ */
 export const DEFAULT_LABOR_PRIORITY: LaborPriority = [
-  'food', 'distribution', 'industry', 'infrastructure', 'health', 'religion',
+  'food', 'safety', 'distribution', 'industry', 'infrastructure', 'health', 'religion',
   'education', 'culture', 'government', 'monument', 'military', 'trade',
 ];
 
@@ -165,8 +185,16 @@ export class City {
   savings = 0;
   salary = 60;
   taxRate = 0.08;
+  /** Wage rate as a multiple of the kingdom standard. 1.0 is neutral. */
+  wageRate = 1.0;
+
+  /** City mood, 0..100, with the dominant cause named for the player. */
+  sentiment = 60;
+  sentimentCause = 'Your city is settled';
 
   population = 0;
+  /** Residents of manors and estates: they pay well and do not work. */
+  scribes = 0;
   workforce = 0;
   employed = 0;
   unemployment = 0;
@@ -436,7 +464,7 @@ export class City {
       if (b) this.stepBuilding(b);
     }
 
-    if (++this.dayAccumulator >= 30) {
+    if (++this.dayAccumulator >= TICKS_PER_DAY) {
       this.dayAccumulator = 0;
       this.stepDay();
     }
@@ -488,6 +516,13 @@ export class City {
       }
     }
 
+    // A venue with no performer sends nobody out. The school, not the venue, is the
+    // thing that was missing.
+    if (def.needsPerformerFrom) {
+      b.performers = Math.max(0, (b.performers ?? 0) - 0.006);
+      if ((b.performers ?? 0) <= 0) return;
+    }
+
     // Walker despatch.
     if (def.walkerInterval && b.hasRoad && operational) {
       if (b.walkerCooldown > 0) b.walkerCooldown--;
@@ -513,8 +548,11 @@ export class City {
 
     // Bazaars fetch stock when low.
     if (def.id === 'bazaar' && b.hasRoad && operational) {
+      // Restock while there is still stock to sell, not once the shelves are bare: a
+      // buyer's round trip takes longer than a seller's, so waiting until the bazaar
+      // is nearly empty guarantees a gap with nothing on the street.
       const total = Object.values(b.store).reduce((a: number, v) => a + (v ?? 0), 0);
-      if (total < 60 && b.walkers.length < 4) this.walkers.spawnBuyer(b);
+      if (total < 220 && b.walkers.length < 4) this.walkers.spawnBuyer(b);
     }
   }
 
@@ -633,8 +671,12 @@ export class City {
       const dmgBase = def.damageRisk ?? (b.house ? 0.25 : 0.2);
       // Ra's displeasure makes the city burn.
       const raMul = this.godMood.ra < -40 ? 2.2 : 1;
-      b.fire = clamp(b.fire + fireBase * raMul * 0.55, 0, 120);
-      b.damage = clamp(b.damage + dmgBase * 0.5, 0, 120);
+      // Slow enough that a young city gets a chance. At the previous rate a bazaar
+      // went from built to burnt inside ten months, which meant the first fire always
+      // arrived before the player had the workers to staff a firehouse — punishment
+      // for the opening, not a hazard to manage.
+      b.fire = clamp(b.fire + fireBase * raMul * 0.26, 0, 120);
+      b.damage = clamp(b.damage + dmgBase * 0.24, 0, 120);
     }
   }
 
@@ -669,7 +711,77 @@ export class City {
     this.updateImmigration();
     this.updateHealth();
     this.updateStats();
+    this.updateSentiment();
     this.checkLogistics();
+  }
+
+  /**
+   * City mood as a single 0..100 value. The number matters less than the reason: a
+   * player told "your people are hungry" can act, a player told "sentiment 43" cannot,
+   * so the dominant negative factor is recorded alongside the score.
+   */
+  private updateSentiment(): void {
+    const factors: { delta: number; cause: string }[] = [];
+
+    const foodMonths = this.foodMonthsRemaining();
+    if (foodMonths < 0.5) factors.push({ delta: -30, cause: 'Your people are going hungry' });
+    else if (foodMonths < 1.5) factors.push({ delta: -10, cause: 'Food is running short' });
+    else factors.push({ delta: +8, cause: '' });
+
+    const foodTypes = this.averageFoodVariety();
+    if (foodTypes >= 2) factors.push({ delta: +5, cause: '' });
+
+    if (this.unemployment > 0.25) factors.push({ delta: -18, cause: 'Too many people have no work' });
+    else if (this.unemployment > 0.12) factors.push({ delta: -7, cause: 'Work is hard to come by' });
+    else factors.push({ delta: +6, cause: '' });
+
+    const wageDelta = (this.wageRate - 1) * 24;
+    factors.push({ delta: wageDelta, cause: wageDelta < -4 ? 'Wages are below what the kingdom pays' : '' });
+
+    const taxPenalty = (this.taxRate - 0.08) * 260;
+    factors.push({ delta: -taxPenalty, cause: taxPenalty > 6 ? 'Taxes are resented' : '' });
+
+    if (this.stats.avgHealth < 45) factors.push({ delta: -14, cause: 'Sickness is spreading' });
+
+    const angriest = GOD_IDS.reduce((a, g) => (this.godMood[g] < this.godMood[a] ? g : a), GOD_IDS[0]);
+    if (this.godMood[angriest] < -50) {
+      factors.push({ delta: -12, cause: `${GODS[angriest].name} is angry with your city` });
+    }
+
+    if (this.stats.crime > 45) factors.push({ delta: -10, cause: 'Crime is troubling the streets' });
+
+    let target = 50;
+    for (const f of factors) target += f.delta;
+    target = clamp(target, 0, 100);
+    this.sentiment = approach(this.sentiment, target, 8);
+
+    const worst = factors
+      .filter((f) => f.cause && f.delta < 0)
+      .sort((a, b) => a.delta - b.delta)[0];
+    this.sentimentCause = worst
+      ? worst.cause
+      : this.sentiment > 75 ? 'Your people are content'
+      : this.sentiment > 50 ? 'Your city is settled'
+      : 'Your people are uneasy';
+  }
+
+  private averageFoodVariety(): number {
+    let total = 0;
+    let n = 0;
+    for (const id of this.liveBuildings) {
+      const b = this.buildings[id];
+      if (!b?.house || b.house.people <= 0) continue;
+      total += FOOD_IDS.filter((f) => (b.house!.foods[f] ?? 0) > 0.05).length;
+      n++;
+    }
+    return n ? total / n : 0;
+  }
+
+  /** Sentiment as a band the UI can show next to the number. */
+  get sentimentBand(): string {
+    const s = this.sentiment;
+    return s > 80 ? 'Delighted' : s > 62 ? 'Content' : s > 45 ? 'Settled'
+      : s > 28 ? 'Discontented' : 'Angry';
   }
 
   private lastLogisticsWarning = -99999;
@@ -717,7 +829,10 @@ export class City {
    * exactly the pressure that makes labour priority a real decision.
    */
   private allocateLabor(): void {
-    this.workforce = Math.floor(this.population * 0.42);
+    // Scribes live in manors and estates. They pay a great deal of tax and lift culture
+    // and prosperity, but they do not work, so a city that evolves everything to manor
+    // level quietly dismantles its own labour force.
+    this.workforce = Math.floor(Math.max(0, this.population - this.scribes) * 0.42);
     let pool = this.workforce;
     let needed = 0;
 
@@ -837,9 +952,7 @@ export class City {
         h.hunger = 0;
       }
 
-      const goodsCount = HOUSING[h.level].goods;
-      for (let gi = 0; gi < goodsCount; gi++) {
-        const g = HOUSEHOLD_GOODS[gi];
+      for (const g of HOUSING[h.level].goods) {
         const need = h.people * 0.045;
         const have = h.goods[g] ?? 0;
         h.goods[g] = Math.max(0, have - need);
@@ -897,42 +1010,57 @@ export class City {
 
   /** Returns a human-readable reason the house fails `lvl`, or '' if it meets it. */
   private housingFailure(b: Building, h: HouseState, lvl: typeof HOUSING[number], des: number): string {
-    if (des < lvl.desirability) return `Desirability ${des} — needs ${lvl.desirability}`;
-    if (des > lvl.desirabilityMax) return `Too desirable for ${lvl.name.toLowerCase()}`;
-    if (lvl.water === 1 && !h.services.wellWater && !h.services.water) return 'No access to water';
-    if (lvl.water === 2 && !h.services.water) return 'Needs a water supply, not just a well';
+    if (des < lvl.desirability) return `Desirability is ${des} and it needs ${lvl.desirability} — plant gardens, or move the industry away`;
+    if (des > lvl.desirabilityMax) return `Too desirable to stay a ${lvl.name.toLowerCase()}`;
+
+    if (lvl.water === 1 && !h.services.wellWater && !h.services.water) return 'No water — no well covers it and no water carrier calls';
+    if (lvl.water === 2 && !h.services.water) return 'Needs a water supply, a well is not enough';
 
     const foodTypes = FOOD_IDS.filter((f) => (h.foods[f] ?? 0) > 0.05).length;
-    if (foodTypes < lvl.foodTypes) return `Needs ${lvl.foodTypes} food type${lvl.foodTypes > 1 ? 's' : ''}, has ${foodTypes}`;
+    if (foodTypes < lvl.foodTypes) {
+      return foodTypes === 0
+        ? 'No food has reached this house — no bazaar seller is calling here'
+        : `Only ${foodTypes} kind${foodTypes > 1 ? 's' : ''} of food arrives; it wants ${lvl.foodTypes}`;
+    }
 
     const gods = GOD_IDS.filter((g) => h.services[RELIGION_SERVICE[g]]).length;
-    if (gods < lvl.gods) return `Needs ${lvl.gods} god${lvl.gods > 1 ? 's' : ''}, has ${gods}`;
-
-    for (let i = 0; i < lvl.goods; i++) {
-      const g = HOUSEHOLD_GOODS[i];
-      if ((h.goods[g] ?? 0) <= 0.05) return `Needs ${GOODS[g].name.toLowerCase()}`;
+    if (gods < lvl.gods) {
+      return gods === 0
+        ? 'No priest has called here — it needs a shrine or temple within walking distance'
+        : `${gods} god${gods > 1 ? 's are' : ' is'} worshipped here; it wants ${lvl.gods}`;
     }
 
-    if (lvl.education >= 1 && !h.services.school && !h.services.library) return 'Needs a scribal school';
-    if (lvl.education === 2 && !h.services.library && !h.services.school) return 'Needs education';
-    if (lvl.education === 2 && !(h.services.school || h.services.library)) return 'Needs education';
-    if (lvl.education === 3 && !(h.services.school && h.services.library)) return 'Needs both school and library';
+    for (const g of lvl.goods) {
+      if ((h.goods[g] ?? 0) <= 0.05) {
+        return `No ${GOODS[g].name.toLowerCase()} has reached this house`;
+      }
+    }
 
+    // Entertainment is counted in distinct types, never in venue count: four booths is
+    // one type of entertainment, not four.
     const ent: ServiceId[] = ['booth', 'bandstand', 'pavilion', 'senet'];
-    for (let i = 0; i < lvl.entertainment; i++) {
-      if (!h.services[ent[i]]) {
-        const names = ['a booth', 'a bandstand', 'a pavilion', 'a senet house'];
-        return `Needs ${names[i]}`;
-      }
+    const entTypes = ent.filter((e) => h.services[e]).length;
+    if (entTypes < lvl.entertainment) {
+      return `Needs ${lvl.entertainment} kinds of entertainment, has ${entTypes}`;
     }
 
-    const health: ServiceId[] = ['apothecary', 'physician', 'dentist', 'mortuary'];
-    for (let i = 0; i < lvl.health; i++) {
-      if (!h.services[health[i]]) {
-        const names = ['an apothecary', 'a physician', 'a dentist', 'a mortuary'];
-        return `Needs ${names[i]}`;
-      }
+    if (lvl.education === 1 && !h.services.school && !h.services.library) {
+      return 'Needs a scribal school or a library';
     }
+    if (lvl.education === 2 && !(h.services.school && h.services.library)) {
+      return 'Needs both a school and a library';
+    }
+
+    if (lvl.health >= 1 && !h.services.physician && !h.services.mortuary) {
+      return 'Needs a physician or a mortuary';
+    }
+    if (lvl.health >= 2 && !h.services.dentist) return 'Needs a dentist';
+    if (lvl.health >= 3 && !(h.services.physician && h.services.mortuary)) {
+      return 'Needs both a physician and a mortuary';
+    }
+
+    if (lvl.magistrate && !h.services.magistrate) return 'No magistrate calls here — it needs a courthouse in range';
+
     return '';
   }
 
@@ -959,8 +1087,9 @@ export class City {
       const def = this.def(b);
       expense += def.upkeep;
     }
-    // Wages scale with the number of people actually working.
-    expense += Math.round(this.employed * 0.10);
+    // Wages scale with the number of people actually working and with the rate the
+    // player has set against the kingdom standard.
+    expense += Math.round(this.employed * 0.10 * this.wageRate);
     this.funds -= expense;
     this.stats.monthlyExpense = expense;
 
@@ -1009,6 +1138,9 @@ export class City {
     attractiveness += this.stats.workersNeeded > this.workforce ? 1.0 : 0;
     attractiveness -= (this.taxRate - 0.08) * 22;
     attractiveness += (this.ratings.prosperity - 30) / 60;
+    // Sentiment and the wage rate relative to the kingdom standard both pull directly.
+    attractiveness += (this.sentiment - 50) / 25;
+    attractiveness += (this.wageRate - 1) * 1.5;
 
     this.stats.immigrationRate = attractiveness;
 
@@ -1104,6 +1236,7 @@ export class City {
 
   private updateStats(): void {
     let pop = 0;
+    let scribePop = 0;
     let literate = 0;
     let crime = 0;
     let fire = 0;
@@ -1114,6 +1247,7 @@ export class City {
       if (!b) continue;
       if (b.house) {
         pop += b.house.people;
+        if (HOUSING[b.house.level].scribes) scribePop += b.house.people;
         houses++;
         if (b.house.services.school || b.house.services.library) literate += b.house.people;
         crime += b.house.crime;
@@ -1122,6 +1256,7 @@ export class City {
       dmg = Math.max(dmg, b.damage);
     }
     this.population = pop;
+    this.scribes = scribePop;
     this.stats.literacy = pop ? Math.round((literate / pop) * 100) : 0;
     this.stats.crime = houses ? crime / houses : 0;
     this.stats.fireRisk = fire;

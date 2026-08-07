@@ -15,11 +15,13 @@ import { Systems } from './systems';
 import { HOUSING, BUILDING_BY_ID, GOD_IDS, RELIGION_SERVICE } from './data';
 
 export type OverlayId =
-  | 'none' | 'water' | 'desirability' | 'fire' | 'damage' | 'religion' | 'education'
-  | 'entertainment' | 'health' | 'food' | 'tax' | 'crime' | 'workers' | 'fertility' | 'roads';
+  | 'none' | 'problems' | 'water' | 'desirability' | 'fire' | 'damage' | 'religion' | 'education'
+  | 'entertainment' | 'health' | 'food' | 'tax' | 'crime' | 'workers' | 'fertility' | 'roads'
+  | 'housing';
 
 export const OVERLAYS: { id: OverlayId; name: string }[] = [
   { id: 'none', name: 'None' },
+  { id: 'problems', name: 'Problems' },
   { id: 'water', name: 'Water' },
   { id: 'desirability', name: 'Desirability' },
   { id: 'fertility', name: 'Fertility' },
@@ -33,6 +35,7 @@ export const OVERLAYS: { id: OverlayId; name: string }[] = [
   { id: 'damage', name: 'Damage' },
   { id: 'crime', name: 'Crime' },
   { id: 'workers', name: 'Employment' },
+  { id: 'housing', name: 'Housing levels' },
   { id: 'roads', name: 'Roads' },
 ];
 
@@ -138,6 +141,16 @@ export class Scene {
   /** Currently inspected building id. */
   selected = -1;
 
+  /**
+   * Reachability halo, when the player has asked to see one. Held here rather than
+   * recomputed per frame: the road graph only changes when something is built.
+   */
+  halo: { building: number; roads: Set<number>; served: Set<number>; range: number } | null = null;
+
+  /** Footprint tiles of every building currently reporting a fault, for the Problems overlay. */
+  private problemTiles = new Set<number>();
+  private problemTimer = 1e9;
+
   private buckets: number[][] = [];
   private walkerBuckets: number[][] = [];
   private white: Sprite;
@@ -196,7 +209,15 @@ export class Scene {
 
     this.drawTerrain(city, x0, y0, x1, y1, time, light);
     this.drawRoads(city, x0, y0, x1, y1, light);
+    if (this.overlay === 'problems') {
+      this.problemTimer += dt;
+      if (this.problemTimer > 0.5) {
+        this.problemTimer = 0;
+        this.collectProblemTiles(city, systems);
+      }
+    }
     if (this.overlay !== 'none') this.drawOverlay(city, x0, y0, x1, y1);
+    if (this.halo) this.drawHalo(city, x0, y0, x1, y1, time);
     this.drawObjects(city, systems, x0, y0, x1, y1, time, light);
     this.drawCursor(city);
 
@@ -490,6 +511,77 @@ export class Scene {
     }
   }
 
+  /**
+   * Show, or clear, the reachability halo for one building. Cheap enough to call on
+   * every tap: it is a bounded breadth-first search over the road grid.
+   */
+  setHalo(city: City, systems: Systems, buildingId: number): boolean {
+    if (buildingId < 0) {
+      this.halo = null;
+      return false;
+    }
+    if (this.halo?.building === buildingId) {
+      this.halo = null;
+      return false;
+    }
+    const b = city.buildings[buildingId];
+    if (!b) return false;
+    const h = systems.reachabilityHalo(b);
+    if (!h) return false;
+    this.halo = {
+      building: buildingId,
+      roads: new Set(h.roads),
+      served: new Set(h.served),
+      range: h.range,
+    };
+    return true;
+  }
+
+  /** Recompute the alert footprint set that the Problems overlay paints. */
+  private collectProblemTiles(city: City, systems: Systems): void {
+    const w = city.world;
+    this.problemTiles.clear();
+    for (const p of systems.cityProblems(60)) {
+      const id = p.buildingId ?? (p.tile !== undefined ? w.building[p.tile] : -1);
+      if (id !== undefined && id >= 0) {
+        const b = city.buildings[id];
+        if (b) {
+          for (let dy = 0; dy < b.size; dy++) {
+            for (let dx = 0; dx < b.size; dx++) {
+              if (w.inBounds(b.x + dx, b.y + dy)) this.problemTiles.add(w.idx(b.x + dx, b.y + dy));
+            }
+          }
+          continue;
+        }
+      }
+      if (p.tile !== undefined && p.tile >= 0) this.problemTiles.add(p.tile);
+    }
+  }
+
+  /**
+   * The halo itself. Road tiles the walker can still be standing on read cool and
+   * solid; houses those tiles touch read warm, because those are the ones that will
+   * actually receive the service. Everything outside is simply left alone — the
+   * absence is the diagnosis.
+   */
+  private drawHalo(city: City, x0: number, y0: number, x1: number, y1: number, time: number): void {
+    const h = this.halo!;
+    const r = this.renderer;
+    const w = city.world;
+    const sp = this.atlas.get('ui_overlay');
+    // A slow pulse, so the halo cannot be mistaken for an overlay that is always on.
+    const pulse = 0.44 + Math.sin(time * 2.4) * 0.08;
+
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        const i = w.idx(tx, ty);
+        const [wx, wy] = tileToWorld(tx, ty);
+        if (h.roads.has(i)) r.draw(sp, wx, wy, 1, 0.42, 0.86, 1.0, pulse);
+        else if (h.served.has(i)) r.draw(sp, wx, wy, 1, 1.0, 0.82, 0.36, pulse * 0.85);
+      }
+    }
+  }
+
   /** Colour for one tile under the active overlay, or null to leave it alone. */
   private overlayColor(city: City, i: number, tx: number, ty: number): [number, number, number, number] | null {
     const w = city.world;
@@ -502,6 +594,12 @@ export class Scene {
     };
 
     switch (this.overlay) {
+      case 'problems':
+        // A single alert colour on everything at fault, and a desaturating scrim over
+        // everything else, so a fault is visible without hunting for it.
+        return this.problemTiles.has(i)
+          ? [1.0, 0.30, 0.26, 0.58]
+          : [0.10, 0.10, 0.13, 0.52];
       case 'roads':
         return w.road[i] ? [0.4, 0.9, 1, 0.4] : null;
       case 'fertility':
@@ -540,6 +638,15 @@ export class Scene {
     if (!b.house) return null;
     const h = b.house;
     switch (this.overlay) {
+      case 'housing': {
+        // A twenty-step ramp from mud brown through ochre to lapis, so a district's
+        // level reads as a gradient rather than as twenty indistinguishable greens.
+        if (h.level === 0 || h.people === 0) return [0.35, 0.32, 0.30, 0.45];
+        const t = (h.level - 1) / 19;
+        return t < 0.5
+          ? [0.62 + t * 0.7, 0.40 + t * 0.9, 0.26 + t * 0.3, 0.5]
+          : [0.97 - (t - 0.5) * 1.5, 0.85 - (t - 0.5) * 0.6, 0.41 + (t - 0.5) * 1.1, 0.5];
+      }
       case 'water':
         return h.services.water ? [0.3, 0.8, 1, 0.5] : h.services.wellWater ? [0.5, 0.9, 0.7, 0.42] : [1, 0.3, 0.3, 0.45];
       case 'religion': {

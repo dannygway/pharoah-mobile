@@ -151,21 +151,46 @@ const built = await page.evaluate(() => {
 
   // Wells are not in this list: they serve a radius, so they go inside the housing
   // cells rather than in the civic centre where they would reach nobody.
+  // Sized to a labour budget this district can actually meet. Ten service buildings
+  // wanting seventy-seven workers out of a workforce of sixty is a labour shortage, and
+  // a city that cannot staff its temple tells you nothing about whether priests reach
+  // houses. Granary 8, bazaar 8, water 6, temple 8, firehouse 6, three farms 30: sixty
+  // six jobs, which a district of about a hundred and sixty people can fill.
   const wanted = [
-    'granary', 'storage_yard', 'bazaar', 'water_supply', 'temple_osiris',
-    'firehouse', 'architect_post', 'tax_collector', 'booth', 'scribal_school',
+    'granary', 'bazaar', 'water_supply', 'temple_osiris', 'firehouse',
   ];
+  // Services are interleaved with the cells left for housing rather than massed in
+  // the middle. A roamer spends twenty-odd road tiles and turns for home, and cells sit
+  // five tiles apart, so a civic centre five cells across has its far side out of reach
+  // of its own bazaar. Every second cell keeps housing beside every service.
   const placedSvc = [];
   const usedCells = new Set();
   for (const id of wanted) {
-    for (const { cell, k } of byDistance) {
-      if (usedCells.has(k)) continue;
-      if (c.place(id, cell[0], cell[1]) !== -1) { placedSvc.push(id); usedCells.add(k); break; }
+    let placed = false;
+    for (let pass = 0; pass < 2 && !placed; pass++) {
+      for (let n = 0; n < byDistance.length; n++) {
+        // First pass takes alternating cells; second pass takes whatever is left.
+        if (pass === 0 && n % 2 === 1) continue;
+        const { cell, k } = byDistance[n];
+        if (usedCells.has(k)) continue;
+        if (c.place(id, cell[0], cell[1]) !== -1) {
+          placedSvc.push(id);
+          usedCells.add(k);
+          placed = true;
+          break;
+        }
+      }
     }
   }
 
+  // A shrine to each of the five, tucked into the corners of the housing cells. They
+  // cost sixty deben, need no workers and deliver no service — but a god left neglected
+  // for two years acts on it, and Seth's answer is an invasion the district has no army
+  // to meet. Four angry gods will wipe a city that is otherwise running perfectly.
+  const shrineGods = ['osiris', 'ra', 'ptah', 'seth', 'bast'];
+
   let farms = 0;
-  for (const id of ['farm_grain', 'farm_veg', 'farm_grain', 'farm_veg']) {
+  for (const id of ['farm_grain', 'farm_veg']) {
     for (let k = 0; k < cells.length; k++) {
       if (usedCells.has(k)) continue;
       const [x, y] = cells[k];
@@ -177,7 +202,21 @@ const built = await page.evaluate(() => {
   // Housing goes in the cells nearest the services, and only as many as a starting
   // city could plausibly fill. Marking out far more lots than you have people for is a
   // real mistake, but it is not the mistake this test is meant to make.
-  const housingCells = byDistance.filter((e) => !usedCells.has(e.k)).slice(0, 8);
+  // Housing wraps the bazaar, not the geometric centre of the plan.
+  //
+  // A seller roams twenty-two road tiles and then turns for home. Cells chosen by
+  // distance from the middle of the district put the nearest housing six cells out,
+  // which is further than that budget reaches: the bazaar sits on full shelves while
+  // every house around it reports no food. That is a real mistake a player makes, and
+  // it is exactly what the reachability halo was added to make visible — but it is not
+  // the mistake this test is here to make.
+  const baz = c.liveBuildings.map((i) => c.buildings[i]).find((b) => b && b.defId === 'bazaar');
+  const anchor = baz ? [baz.x, baz.y] : mid;
+  const housingCells = cells
+    .map((cell, k) => ({ cell, k, d: Math.hypot(cell[0] - anchor[0], cell[1] - anchor[1]) }))
+    .filter((e) => !usedCells.has(e.k))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 5);
 
   let houses = 0;
   let wells = 0;
@@ -187,7 +226,8 @@ const built = await page.evaluate(() => {
     // and a garden, because packed housing will not rise past a cottage without one.
     if (c.place('well', x + 3, y + 3) !== -1) wells++;
     c.place('garden', x + 3, y + 0);
-    c.place('garden', x + 0, y + 3);
+    const shrine = shrineGods.shift();
+    if (!shrine || c.place(`shrine_${shrine}`, x + 0, y + 3) === -1) c.place('garden', x + 0, y + 3);
     for (let dy = 0; dy < 4; dy++) {
       for (let dx = 0; dx < 4; dx++) {
         if ((dx === 3 && dy === 3) || (dx === 3 && dy === 0) || (dx === 0 && dy === 3)) continue;
@@ -218,11 +258,15 @@ if (built.farms < 2) fail.push(`only ${built.farms} farms could be placed — th
 // -------------------------------------------------------------- simulate
 
 const samples = [];
-for (let i = 0; i < 14; i++) {
+// Long enough to matter. The housing ladder adds one requirement per level and a
+// delivered service goes stale in forty game days, so two game years shows only that
+// people arrive; it takes several more before a block settles and climbs.
+for (let i = 0; i < 22; i++) {
   await page.waitForTimeout(2500);
   const s = await page.evaluate(() => {
     const c = window.kemet.game.city;
     let evolved = 0, serviced = 0, maxLevel = 0, food = 0;
+    const blockers = {};
     for (const id of c.liveBuildings) {
       const b = c.buildings[id];
       if (!b?.house) continue;
@@ -230,7 +274,11 @@ for (let i = 0; i < 14; i++) {
       maxLevel = Math.max(maxLevel, b.house.level);
       if (Object.keys(b.house.services).length) serviced++;
       for (const k of Object.keys(b.house.foods)) food += b.house.foods[k];
+      if (b.house.people > 0 && b.house.blocker) {
+        blockers[b.house.blocker] = (blockers[b.house.blocker] ?? 0) + 1;
+      }
     }
+    const topBlocker = Object.entries(blockers).sort((a, b) => b[1] - a[1])[0];
     return {
       year: c.year, month: c.month, season: c.season,
       pop: c.population, walkers: c.walkers.count,
@@ -238,10 +286,11 @@ for (let i = 0; i < 14; i++) {
       evolved, serviced, maxLevel, food: Math.round(food),
       fps: +window.kemet.game.scene.fps.toFixed(0),
       sprites: window.kemet.game.renderer.lastSpriteCount,
+      blocker: topBlocker ? `${topBlocker[1]}× ${topBlocker[0]}` : '',
     };
   });
   samples.push(s);
-  note(`  yr ${s.year + 1} ${s.season}\tpop ${String(s.pop).padStart(4)}\twalkers ${String(s.walkers).padStart(3)}\tserviced ${s.serviced}\tevolved ${s.evolved} (max L${s.maxLevel})\tfood ${s.food}\t${s.fps}fps ${s.sprites} sprites`);
+  note(`  yr ${s.year + 1} ${s.season}\tpop ${String(s.pop).padStart(4)}\twalkers ${String(s.walkers).padStart(3)}\tserviced ${s.serviced}\tevolved ${s.evolved} (max L${s.maxLevel})\tfood ${s.food}\t${s.fps}fps\t${s.problems} faults\t${s.blocker}`);
 }
 
 const last = samples[samples.length - 1];
@@ -260,6 +309,49 @@ else note(`✓ up to ${peak('walkers')} walkers active at once`);
 
 if (peak('serviced') < 15) fail.push(`only ${peak('serviced')} houses received any service — the walker service model is not reaching the district`);
 else note(`✓ ${peak('serviced')} houses receiving services`);
+
+// When the ladder stalls, say what stalled it. A bare "never got past level 2" sends
+// the next reader hunting through the simulation for a bug that may not be there.
+const ladder = await page.evaluate(() => {
+  const c = window.kemet.game.city;
+  const byLevel = {};
+  for (const id of c.liveBuildings) {
+    const b = c.buildings[id];
+    if (!b?.house || b.house.people === 0) continue;
+    const k = b.house.level;
+    byLevel[k] = byLevel[k] ?? { n: 0, blockers: {} };
+    byLevel[k].n++;
+    const bl = b.house.blocker || '(none)';
+    byLevel[k].blockers[bl] = (byLevel[k].blockers[bl] ?? 0) + 1;
+  }
+  return byLevel;
+});
+// The food chain, building by building. When houses report no food the question is
+// always which link is empty: the farm, the granary, or the bazaar.
+const chain = await page.evaluate(() => {
+  const c = window.kemet.game.city;
+  const out = [];
+  for (const id of c.liveBuildings) {
+    const b = c.buildings[id];
+    if (!b) continue;
+    const def = c.def(b);
+    if (!['granary', 'bazaar', 'storage_yard'].includes(def.id) && def.cat !== 'food') continue;
+    const stock = Object.entries(b.store).filter(([, v]) => v > 0.5)
+      .map(([g, v]) => `${g} ${Math.floor(v)}`).join(', ') || 'empty';
+    out.push(`${def.id} road=${b.hasRoad} staff=${b.workers}/${def.workers} ${stock}`);
+  }
+  return out;
+});
+for (const line of chain) note(`    chain ${line}`);
+
+const topFaults = await page.evaluate(() => window.kemet.game.systems.cityProblems(40)
+  .slice(0, 6).map((p) => `${p.severity} ${p.title}: ${p.cause}`));
+for (const f of topFaults) note(`    fault ${f}`);
+for (const [lvl, d] of Object.entries(ladder).sort((a, b) => b[0] - a[0])) {
+  const top = Object.entries(d.blockers).sort((a, b) => b[1] - a[1]).slice(0, 2)
+    .map(([k, n]) => `${n}× ${k}`).join(' | ');
+  note(`    L${lvl}: ${d.n} houses — ${top}`);
+}
 
 if (peak('maxLevel') < 3) fail.push(`housing never evolved past level ${peak('maxLevel')}`);
 else note(`✓ housing evolved to level ${peak('maxLevel')}`);
@@ -294,13 +386,48 @@ else if (saveOk.before.buildings !== saveOk.after.buildings) {
 
 const uiOk = await page.evaluate(() => {
   const q = (s) => !!document.querySelector(s);
+  const { ui, game } = window.kemet;
+  // Exercise the panels that exist only as code until something opens them.
+  ui.openSheet('advisors');
+  const chiefRendered = !!document.querySelector('.chief-mood');
+  // The reachability halo, over whichever building sends a walker out.
+  const svc = game.city.liveBuildings.map((i) => game.city.buildings[i])
+    .find((b) => b && game.city.def(b).walkerRange);
+  const haloOk = svc ? game.scene.setHalo(game.city, game.systems, svc.id) : false;
+  const haloTiles = game.scene.halo ? game.scene.halo.roads.size : 0;
+  const haloServed = game.scene.halo ? game.scene.halo.served.size : 0;
+  // Storage orders: the hardest screen in the game to translate to touch.
+  const yard = game.city.liveBuildings.map((i) => game.city.buildings[i])
+    .find((b) => b && game.city.def(b).storage);
+  if (yard) ui.openOrders(yard.id);
+  const orderRows = document.querySelectorAll('.order-row').length;
+  const segButtons = document.querySelectorAll('.seg .sg').length;
+  ui.closeSheet();
   return {
     topBar: q('.top-bar'), bottomBar: q('.bottom-bar'),
     cats: document.querySelectorAll('.cat').length,
+    strips: document.querySelectorAll('.strip').length,
+    chiefRendered, haloOk, haloTiles, haloServed, orderRows, segButtons,
+    problems: game.systems.cityProblems(40).length,
   };
 });
 if (!uiOk.topBar || !uiOk.bottomBar || uiOk.cats < 5) fail.push('UI chrome did not render: ' + JSON.stringify(uiOk));
 else note(`✓ UI rendered with ${uiOk.cats} build categories`);
+
+if (uiOk.strips < 3) fail.push(`status strip missing readings: ${uiOk.strips} of 3`);
+else note('✓ Nilometer, sentiment and fault count on the status strip');
+
+if (!uiOk.chiefRendered) fail.push('the chief advisor did not render');
+else note(`✓ chief advisor ranks ${uiOk.problems} faults, each one tap from its location`);
+
+if (!uiOk.haloOk || uiOk.haloTiles < 2) fail.push(`reachability halo covered only ${uiOk.haloTiles} road tiles`);
+else note(`✓ reachability halo: ${uiOk.haloTiles} road tiles reachable, ${uiOk.haloServed} house tiles served`);
+
+if (uiOk.orderRows < 5 || uiOk.segButtons < uiOk.orderRows * 3) {
+  fail.push(`storage orders rendered ${uiOk.orderRows} rows with ${uiOk.segButtons} controls`);
+} else {
+  note(`✓ storage orders: ${uiOk.orderRows} goods, Reject/Accept/Get on each`);
+}
 
 // Exercise the sheets so their render paths are covered.
 const panels = await page.evaluate(async () => {
