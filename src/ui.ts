@@ -1347,29 +1347,51 @@ export class UI {
   // Toasts
   // -------------------------------------------------------------------------
 
+  /**
+   * Notifications, one at a time.
+   *
+   * Every new message joins a short queue and is shown on its own, for a time set by
+   * how much it matters: bad news and Pharaoh's requests linger, good news and routine
+   * reports pass quickly. Stacking three cards at once covered the city exactly when
+   * the player most needed to see it. Everything also lands in the message log.
+   */
+  private toastQueue: { id: number; title: string; body: string; kind: string; tile?: number }[] = [];
+  private toastShowing: HTMLElement | null = null;
+
   private refreshToasts(): void {
     const c = this.game.city;
-    const newest = c.messages[0];
-    if (!newest || newest.id === this.lastMessageId) return;
-    this.lastMessageId = newest.id;
-    if (newest.read) return;
+    // Pick up everything new since last time, oldest first.
+    const fresh = c.messages.filter((m) => m.id > this.lastMessageId && !m.read).reverse();
+    if (c.messages[0]) this.lastMessageId = Math.max(this.lastMessageId, c.messages[0].id);
+    for (const m of fresh) {
+      this.toastQueue.push(m);
+      if (m.kind === 'bad' || m.kind === 'warn') this.game.audio.chime(false);
+    }
+    // A backlog is history, not news: keep the most recent few.
+    if (this.toastQueue.length > 3) this.toastQueue.splice(0, this.toastQueue.length - 3);
+    if (this.toastShowing || !this.toastQueue.length) return;
 
-    const t = el('div', { class: `toast ${newest.kind}` },
-      el('div', { class: 'tt' }, newest.title),
-      el('div', { class: 'tb' }, newest.body));
+    const m = this.toastQueue.shift()!;
+    const t = el('div', { class: `toast ${m.kind}` },
+      el('div', { class: 'tt' }, m.title),
+      el('div', { class: 'tb' }, m.body));
+    const close = () => {
+      if (this.toastShowing !== t) return;
+      t.classList.add('out');
+      setTimeout(() => t.remove(), 380);
+      this.toastShowing = null;
+    };
     t.addEventListener('click', () => {
-      newest.read = true;
-      if (newest.tile !== undefined) this.game.centreOnTile(newest.tile);
-      t.remove();
+      const msg = c.messages.find((x) => x.id === m.id);
+      if (msg) msg.read = true;
+      if (m.tile !== undefined) this.game.centreOnTile(m.tile);
+      close();
       this.refresh();
     });
     this.toastWrap.appendChild(t);
-    if (newest.kind === 'bad' || newest.kind === 'warn') this.game.audio.chime(false);
-    setTimeout(() => {
-      t.classList.add('out');
-      setTimeout(() => t.remove(), 400);
-    }, 7000);
-    while (this.toastWrap.children.length > 3) this.toastWrap.firstChild!.remove();
+    this.toastShowing = t;
+    const ms = m.kind === 'bad' || m.kind === 'request' ? 7000 : m.kind === 'warn' ? 6000 : 4200;
+    setTimeout(close, ms);
   }
 
   private toggleDemolish(): void {

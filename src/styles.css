@@ -528,13 +528,116 @@ h4 { margin: 12px 0 5px; font-size: 11px; text-transform: uppercase; letter-spac
 .save-row { display: flex; gap: 6px; align-items: stretch; margin: 5px 0; }
 .save { flex: 1; text-align: left; padding: 10px 12px; border-radius: 11px; }
 
-/* Landscape phones: the HUD has to get out of the way of a very short viewport. */
-@media (max-height: 460px) {
-  .sheet { max-height: 74vh; bottom: calc(var(--safe-b) + 66px); }
-  .card { bottom: calc(var(--safe-b) + 84px); max-height: 46vh; }
-  .cat { min-width: 50px; padding: 4px 6px; }
-  .cat .lbl, .tool .lbl { display: none; }
-  .goals-panel, .minimap, .toasts { top: calc(var(--safe-t) + 70px); }
+/* -------------------------------------------------------------- landscape
+ *
+ * Laid out the way Pharaoh is: the world takes the screen, a single strip of
+ * readings runs along the top, and a control panel down the right edge holds the
+ * build categories and tools. Building lists open beside that panel, the way the
+ * original's submenus pop out to its left, so the city stays visible while you choose.
+ */
+@media (orientation: landscape) {
+  :root { --rail: 108px; --top: 40px; }
+
+  .top-bar {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 6px;
+    height: calc(var(--safe-t) + var(--top));
+    padding: var(--safe-t) calc(var(--safe-r) + 8px) 0 calc(var(--safe-l) + 10px);
+    background: linear-gradient(to bottom, rgba(12,10,8,0.95) 75%, rgba(12,10,8,0.0));
+  }
+  /* Let the three portrait rows pour into the one landscape strip, in order. */
+  .tb-row, .tb-row.one, .tb-row.two, .tb-row.three { display: contents; }
+  .date-line { flex: 0 1 auto; min-width: 0; font-size: 11.5px; margin-right: 4px; }
+  .stat-line { gap: 10px; font-size: 12.5px; margin-right: 4px; }
+  .stat-line .flood { display: none; }          /* the Nilometer chip says it better */
+  .strip { flex: 0 1 auto; max-width: 150px; padding: 4px 7px; font-size: 10.5px; }
+  .strip.probs { max-width: none; }
+  .ratings { flex: 0 1 auto; gap: 3px; margin-left: auto; }
+  .pill { flex: 0 0 auto; flex-direction: row; gap: 3px; padding: 4px 6px; align-items: baseline; }
+  .pill .pn { font-size: 8px; }
+  .pill .pv { font-size: 12px; }
+  .tb-ctl .icon { padding: 4px 7px; font-size: 13px; }
+
+  /* The control panel. */
+  .bottom-bar {
+    left: auto; right: 0;
+    top: calc(var(--safe-t) + var(--top));
+    bottom: 0;
+    width: calc(var(--rail) + var(--safe-r));
+    padding: 4px calc(var(--safe-r) + 6px) calc(var(--safe-b) + 6px) 6px;
+    background: linear-gradient(to left, rgba(12,10,8,0.96) 70%, rgba(12,10,8,0.0));
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .tools, .cats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    overflow: visible;
+  }
+  .tools { order: -1; padding-bottom: 4px; border-bottom: 1px solid var(--edge); }
+  .cats { flex: 1; align-content: start; grid-auto-rows: 1fr; }
+  .tool, .cat {
+    min-width: 0;
+    min-height: 40px;
+    padding: 3px 2px;
+    justify-content: center;
+  }
+  .cat .glyph { font-size: 17px; }
+  .tool .glyph { font-size: 15px; }
+  .cat .lbl, .tool .lbl { display: block; font-size: 8px; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  /* The fifth tool sits alone on its row; let it span. */
+  .tools > :nth-child(5) { grid-column: span 2; flex-direction: row; gap: 6px; min-height: 30px; }
+
+  /* Building lists open beside the panel rather than over the city. */
+  .sheet {
+    left: auto;
+    right: calc(var(--rail) + var(--safe-r));
+    top: calc(var(--safe-t) + var(--top) + 4px);
+    bottom: calc(var(--safe-b) + 6px);
+    width: min(380px, 46vw);
+    max-height: none;
+    border: 1px solid var(--edge);
+    border-radius: 14px;
+    box-shadow: -8px 0 30px rgba(0,0,0,0.5);
+  }
+
+  .card {
+    left: calc(var(--safe-l) + 8px);
+    right: auto;
+    bottom: calc(var(--safe-b) + 8px);
+    width: min(360px, 44vw);
+    margin: 0;
+  }
+  .card-body { max-height: 38vh; }
+  #ui.has-chips .card { bottom: calc(var(--safe-b) + 46px); }
+  .mode-chips {
+    left: calc(var(--safe-l) + 8px);
+    right: calc(var(--rail) + var(--safe-r) + 8px);
+    bottom: calc(var(--safe-b) + 8px);
+    justify-content: flex-start;
+  }
+
+  .toasts {
+    top: calc(var(--safe-t) + var(--top) + 6px);
+    left: calc(var(--safe-l) + 8px);
+    transform: none;
+    width: min(330px, 40vw);
+  }
+  .goals-panel { top: calc(var(--safe-t) + var(--top) + 6px); }
+  .minimap {
+    top: calc(var(--safe-t) + var(--top) + 6px);
+    right: calc(var(--rail) + var(--safe-r) + 8px);
+  }
+}
+
+/* Short landscape screens (every phone): tighten the strip further. */
+@media (orientation: landscape) and (max-height: 460px) {
+  :root { --top: 36px; }
+  .strip.mood { max-width: 120px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

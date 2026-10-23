@@ -8,7 +8,7 @@
  */
 
 import { clamp, money } from './core';
-import { World } from './world';
+import { World, Terrain } from './world';
 import { City, Building, TradeRoute } from './sim';
 import { Systems } from './systems';
 import { Scene, OverlayId, worldToTile, tileToWorld } from './scene';
@@ -147,21 +147,53 @@ export class Game {
     this.systems.tradePolicy = {};
 
     // Point the camera at the middle of the floodplain near the entry point.
-    if (this.city.entryTile >= 0) {
-      this.scene.camera.centreOnTile(this.world.xOf(this.city.entryTile), this.world.yOf(this.city.entryTile));
-    } else {
-      this.scene.camera.centreOnTile(this.world.size / 2, this.world.size / 2);
-    }
+    const site = this.findSettlementSite();
+    this.scene.camera.worldSize = this.world.size;
+    this.scene.camera.centreOnTile(site[0], site[1]);
     this.scene.camera.tzoom = 1.1;
     this.scene.camera.zoom = 1.1;
 
     this.city.pushMessage(m.name, m.brief, 'info');
     this.city.pushMessage('Advice', m.hint, 'info');
+    // The briefing screen has already said this; keep it in the log, not on the map.
+    for (const msg of this.city.messages) msg.read = true;
     this.city.markDirty();
     this.markResumePoint();
   }
 
   private pendingRequests: (Mission['requests'][number] & { fired: boolean })[] = [];
+
+  /**
+   * Where a governor would actually start: dry, buildable ground with black land within
+   * reach for farms, not too far from where the settlers walk in. The camera opens
+   * here instead of on the entry tile, which sits on the map edge and showed the
+   * player a screen that was half empty void.
+   */
+  findSettlementSite(): [number, number] {
+    const w = this.world;
+    const N = w.size;
+    const ex = this.city.entryTile >= 0 ? w.xOf(this.city.entryTile) : N / 2;
+    const ey = this.city.entryTile >= 0 ? w.yOf(this.city.entryTile) : N / 2;
+    let best = -Infinity;
+    let bx = N / 2, by = N / 2;
+    for (let y = 8; y < N - 8; y += 3) {
+      for (let x = 8; x < N - 8; x += 3) {
+        let dry = 0, black = 0, wet = 0;
+        for (let dy = -7; dy <= 7; dy += 2) {
+          for (let dx = -7; dx <= 7; dx += 2) {
+            const t = w.terrain[w.idx(x + dx, y + dy)];
+            if (t === Terrain.Desert || t === Terrain.Grass) dry++;
+            else if (t === Terrain.Floodplain) black++;
+            else if (t === Terrain.Water) wet++;
+          }
+        }
+        const dist = Math.hypot(x - ex, y - ey);
+        const score = dry * 1.0 + Math.min(black, 14) * 1.4 + Math.min(wet, 6) * 0.5 - dist * 0.35;
+        if (score > best) { best = score; bx = x; by = y; }
+      }
+    }
+    return [bx, by];
+  }
 
   // -------------------------------------------------------------------------
   // Loop

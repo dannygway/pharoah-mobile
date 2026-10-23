@@ -126,8 +126,10 @@ void main() {
   float speck = nz(w / 512.0 + 0.37).a;
 
   // Warp the lookup so edges between terrains meander rather than run along the grid.
-  vec2 warp = nz(w / 520.0 + 0.5).rg - 0.5;
-  vec2 p = t - 0.5 + warp * 0.9;
+  // Two octaves: the broad one bends coastlines, the finer one scrambles the one-tile
+  // staircase that a blend of square cells otherwise leaves along every diagonal edge.
+  vec2 warp = (nz(w / 520.0 + 0.5).rg - 0.5) * 1.5 + (nz(w / 190.0 + 0.27).gr - 0.5) * 0.7;
+  vec2 p = t - 0.5 + warp;
   ivec2 i0 = ivec2(floor(p));
   vec2 f = fract(p);
   vec2 s = f * f * (3.0 - 2.0 * f);
@@ -157,10 +159,10 @@ void main() {
   vec3 land = vec3(0.0);
   float lw = 0.0;
   float k;
-  k = pow(w00, 1.7) * float(t00 != WATER); land += k * landColor(t00, d00.g, w, mott, grain, speck, fine); lw += k;
-  k = pow(w10, 1.7) * float(t10 != WATER); land += k * landColor(t10, d10.g, w, mott, grain, speck, fine); lw += k;
-  k = pow(w01, 1.7) * float(t01 != WATER); land += k * landColor(t01, d01.g, w, mott, grain, speck, fine); lw += k;
-  k = pow(w11, 1.7) * float(t11 != WATER); land += k * landColor(t11, d11.g, w, mott, grain, speck, fine); lw += k;
+  k = pow(w00, 1.3) * float(t00 != WATER); land += k * landColor(t00, d00.g, w, mott, grain, speck, fine); lw += k;
+  k = pow(w10, 1.3) * float(t10 != WATER); land += k * landColor(t10, d10.g, w, mott, grain, speck, fine); lw += k;
+  k = pow(w01, 1.3) * float(t01 != WATER); land += k * landColor(t01, d01.g, w, mott, grain, speck, fine); lw += k;
+  k = pow(w11, 1.3) * float(t11 != WATER); land += k * landColor(t11, d11.g, w, mott, grain, speck, fine); lw += k;
   // A pixel deep in the river still needs a bed colour for the shallows.
   land = lw > 0.0001 ? land / lw : vec3(0.66, 0.60, 0.43);
 

@@ -81,14 +81,30 @@ export class Camera {
     this.zoom += (this.tzoom - this.zoom) * k;
   }
 
+  /**
+   * Keep the view over the land. The centre is held inside the map diamond, a few
+   * tiles in from its edge, so the most the player can ever see of the void beyond is
+   * the dark fringe at a corner — never half a screen of it.
+   */
   private clampTarget(): void {
-    // Keep the camera roughly over the map: the diamond spans ±size*TILE_W/2 in x.
-    const halfW = (this.worldSize * TILE_W) / 2;
-    const maxY = this.worldSize * TILE_H;
-    const pad = 260;
-    this.tx = clamp(this.tx, -halfW - pad, halfW + pad);
-    this.ty = clamp(this.ty, -pad, maxY + pad);
     this.tzoom = clamp(this.tzoom, this.minZoom, this.maxZoom);
+    const n = this.worldSize;
+    const m = Math.min(6, n / 4);
+    const a = this.tx / (TILE_W / 2);
+    const b = this.ty / (TILE_H / 2);
+    let tx = (b + a) / 2;
+    let ty = (b - a) / 2;
+    const cx = clamp(tx, m, n - m);
+    const cy = clamp(ty, m, n - m);
+    if (cx !== tx || cy !== ty) {
+      // Kill momentum along whichever axis hit the edge, so a fling stops cleanly.
+      tx = cx;
+      ty = cy;
+      this.tx = (tx - ty) * (TILE_W / 2);
+      this.ty = (tx + ty) * (TILE_H / 2);
+      this.vx *= 0.5;
+      this.vy *= 0.5;
+    }
   }
 
   /** Convert a CSS-pixel screen point to world pixels. */
