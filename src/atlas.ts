@@ -44,7 +44,16 @@ export interface Atlas {
 // Colour helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Parse a colour. Accepts the hex this file writes by hand and the rgba() strings that
+ * shade() and mix() return, so the helpers compose: mix(shade(c, 0.7), warm, 0.2).
+ * Hex-only parsing turned any such nesting into NaN, which canvas renders as garbage.
+ */
 function hexToRgb(hex: string): [number, number, number] {
+  if (hex.startsWith('rgb')) {
+    const v = hex.slice(hex.indexOf('(') + 1, hex.indexOf(')')).split(',').map((n) => parseFloat(n));
+    return [v[0] || 0, v[1] || 0, v[2] || 0];
+  }
   const h = hex.replace('#', '');
   const v = h.length === 3
     ? h.split('').map((c) => parseInt(c + c, 16))
@@ -443,6 +452,14 @@ function drawBuilding(ctx: CanvasRenderingContext2D, def: BuildingDef, sc: numbe
 
   groundShadow(ctx, ox, oy, s, tw, th);
 
+  switch (def.id) {
+    case 'granary': drawGranary(ctx, ox, oy, s, tw, th, sc, rng); return;
+    case 'bazaar': drawBazaar(ctx, ox, oy, s, tw, th, sc, rng); return;
+    case 'storage_yard': drawStorageYard(ctx, ox, oy, s, tw, th, sc, rng); return;
+    case 'water_supply': drawWaterSupply(ctx, ox, oy, s, tw, th, sc); return;
+    case 'work_camp': drawWorkCamp(ctx, ox, oy, s, tw, th, sc, rng); return;
+  }
+
   switch (def.art.style) {
     case 'road':
       drawFlatPlatform(ctx, ox, oy, s, tw, th, base, roof);
@@ -483,6 +500,300 @@ function drawBuilding(ctx: CanvasRenderingContext2D, def: BuildingDef, sc: numbe
     default:
       drawMudBuilding(ctx, ox, oy, s, tw, th, h, sc, rng, base, roof, accent);
       break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Signature buildings
+//
+// The handful of buildings a player looks at most — granary, bazaar, storage yard,
+// water supply, work camp — each get their own drawing rather than a generic box, so
+// a city reads at a glance the way Pharaoh's does: domed silos, striped awnings,
+// stacked goods, a stone basin of water, a huddle of shelters.
+// ---------------------------------------------------------------------------
+
+/** Helpers shared by the signature drawings, in tile coordinates inside a footprint. */
+function footprintKit(ctx: CanvasRenderingContext2D, ox: number, oy: number, tw: number, th: number, sc: number) {
+  const at = (fx: number, fy: number): [number, number] => [ox + (fx - fy) * tw / 2, oy + (fx + fy) * th / 2];
+  const poly = (pts: [number, number][], fill: string) => {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.fill();
+  };
+  const floor = (fx: number, fy: number, w: number, d: number, fill: string) =>
+    poly([at(fx, fy), at(fx + w, fy), at(fx + w, fy + d), at(fx, fy + d)], fill);
+  const box = (fx: number, fy: number, size: number, h: number, top: string, left: string, right: string) => {
+    const [x, y] = at(fx, fy);
+    isoBox(ctx, x, y, size, h * sc, top, left, right, tw, th);
+  };
+  const wall = (a: [number, number], b: [number, number], h: number, face: string, cap: string) => {
+    poly([a, b, [b[0], b[1] - h * sc], [a[0], a[1] - h * sc]], face);
+    ctx.strokeStyle = cap;
+    ctx.lineWidth = 1.2 * sc;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1] - h * sc);
+    ctx.lineTo(b[0], b[1] - h * sc);
+    ctx.stroke();
+  };
+  return { at, poly, floor, box, wall };
+}
+
+/** A mud-brick beehive silo: a short cylinder under a dome, with a hatch near the top. */
+function drawSilo(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, h: number, sc: number, body: string): void {
+  const ry = r * 0.5;
+  // Body.
+  const g = ctx.createLinearGradient(x - r, 0, x + r, 0);
+  g.addColorStop(0, mix(shade(body, 0.7), '#8a6438', 0.25));
+  g.addColorStop(0.55, mix(body, '#fff4dc', 0.15));
+  g.addColorStop(1, mix(shade(body, 0.88), '#b08050', 0.12));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(x - r, y - h);
+  ctx.lineTo(x - r, y);
+  ctx.ellipse(x, y, r, ry, 0, Math.PI, 0, true);
+  ctx.lineTo(x + r, y - h);
+  ctx.closePath();
+  ctx.fill();
+  // Dome.
+  ctx.beginPath();
+  ctx.moveTo(x - r, y - h);
+  ctx.bezierCurveTo(x - r, y - h - r * 1.5, x + r, y - h - r * 1.5, x + r, y - h);
+  ctx.ellipse(x, y - h, r, ry, 0, 0, Math.PI, false);
+  ctx.closePath();
+  ctx.fill();
+  // Hatch and a ladder.
+  ctx.fillStyle = '#3a2a1a';
+  ctx.fillRect(x - 1.6 * sc, y - h - r * 0.55, 3.2 * sc, 3 * sc);
+  ctx.strokeStyle = '#7a5a36';
+  ctx.lineWidth = 0.9 * sc;
+  ctx.beginPath();
+  ctx.moveTo(x + r * 0.35, y + ry * 0.6);
+  ctx.lineTo(x + r * 0.35, y - h - r * 0.3);
+  ctx.moveTo(x + r * 0.62, y + ry * 0.4);
+  ctx.lineTo(x + r * 0.62, y - h - r * 0.1);
+  ctx.stroke();
+}
+
+function drawGranary(ctx: CanvasRenderingContext2D, ox: number, oy: number, s: number, tw: number, th: number, sc: number, rng: RNG): void {
+  const k = footprintKit(ctx, ox, oy, tw, th, sc);
+  const mud = '#cdb184';
+  k.floor(0.05, 0.05, s - 0.1, s - 0.1, '#bfa47a');
+  // Back walls.
+  k.wall(k.at(0.05, s - 0.05), k.at(0.05, 0.05), 7, shade(mud, 0.86), mix(mud, '#ffffff', 0.25));
+  k.wall(k.at(0.05, 0.05), k.at(s - 0.05, 0.05), 7, shade(mud, 0.66), mix(mud, '#ffffff', 0.25));
+  // Two rows of three silos, back to front.
+  const spots: [number, number][] = [];
+  for (let j = 0; j < 2; j++) for (let i = 0; i < 3; i++) spots.push([0.55 + i * 0.8, 0.5 + j * 0.85]);
+  spots.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
+  for (const [fx, fy] of spots) {
+    const [x, y] = k.at(fx, fy);
+    drawSilo(ctx, x, y, tw * 0.17, th * 0.85, sc, mud);
+  }
+  // The scribe's office on the front corner, and sacks at the gate.
+  k.box(s - 1.05, s - 1.05, 0.85, 12, mix(mud, '#ffffff', 0.18), shade(mud, 0.66), shade(mud, 0.88));
+  for (let i = 0; i < 5; i++) {
+    const [x, y] = k.at(0.4 + rng.float(0, 0.9), s - 0.45 + rng.float(-0.12, 0.12));
+    ctx.fillStyle = i % 2 ? '#d9c08c' : '#c9ac74';
+    ctx.beginPath();
+    ctx.ellipse(x, y - 2.4 * sc, 3.6 * sc, 2.6 * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Front walls, with a gap for the gate.
+  k.wall(k.at(0.05, s - 0.05), k.at(s * 0.35, s - 0.05), 7, shade(mud, 0.66), mix(mud, '#ffffff', 0.25));
+  k.wall(k.at(s - 0.05, 0.05), k.at(s - 0.05, s * 0.55), 7, shade(mud, 0.86), mix(mud, '#ffffff', 0.25));
+}
+
+function drawBazaar(ctx: CanvasRenderingContext2D, ox: number, oy: number, s: number, tw: number, th: number, sc: number, rng: RNG): void {
+  const k = footprintKit(ctx, ox, oy, tw, th, sc);
+  // Beaten earth, a shade paler where the crowd stands.
+  k.floor(0.04, 0.04, s - 0.08, s - 0.08, '#d6bf92');
+  k.floor(0.6, 0.6, s - 1.2, s - 1.2, '#dcc89e');
+  const awnings: [string, string][] = [['#c9564a', '#efe2c4'], ['#3f6f9a', '#efe2c4'], ['#b08a2e', '#f2e6c8'], ['#5f8a45', '#efe2c4']];
+  // Four stalls around the square, back ones first.
+  const stalls: [number, number][] = [[0.18, 0.18], [1.12, 0.18], [0.18, 1.12], [1.12, 1.12]];
+  stalls.forEach(([fx, fy], i) => {
+    const [x, y] = k.at(fx + 0.35, fy + 0.35);
+    // Counter.
+    k.box(fx + 0.12, fy + 0.12, 0.46, 5, '#a8865a', '#7a5a36', '#94744a');
+    // Goods on the counter: little heaps in produce colours.
+    const goods = ['#d8b24a', '#7fae4c', '#b0384b', '#c8a35a', '#e2ddcc'];
+    for (let n = 0; n < 4; n++) {
+      ctx.fillStyle = goods[(i + n) % goods.length];
+      ctx.beginPath();
+      ctx.arc(x + (n - 1.5) * 3.2 * sc, y - 5 * sc - (n % 2) * 1.2 * sc, 1.9 * sc, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Poles and a striped awning.
+    const [a1, a2] = awnings[i];
+    const top = 16 * sc;
+    ctx.strokeStyle = '#6e5233';
+    ctx.lineWidth = 1.3 * sc;
+    for (const [px, py] of [k.at(fx + 0.08, fy + 0.62), k.at(fx + 0.62, fy + 0.08), k.at(fx + 0.62, fy + 0.62)]) {
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px, py - top);
+      ctx.stroke();
+    }
+    const c0 = k.at(fx + 0.02, fy + 0.02), c1 = k.at(fx + 0.68, fy + 0.02);
+    const c2 = k.at(fx + 0.68, fy + 0.68), c3 = k.at(fx + 0.02, fy + 0.68);
+    const lift = (p: [number, number], d: number): [number, number] => [p[0], p[1] - top - d];
+    k.poly([lift(c0, 3 * sc), lift(c1, 2 * sc), lift(c2, 0), lift(c3, 1 * sc)], a1);
+    // Stripes.
+    ctx.save();
+    ctx.beginPath();
+    const pts = [lift(c0, 3 * sc), lift(c1, 2 * sc), lift(c2, 0), lift(c3, 1 * sc)];
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]);
+    ctx.closePath();
+    ctx.clip();
+    ctx.strokeStyle = a2;
+    ctx.lineWidth = 2.2 * sc;
+    for (let t = -4; t <= 4; t++) {
+      const [sx, sy] = k.at(fx + 0.35 + t * 0.12, fy - 0.2);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - top - 10 * sc);
+      ctx.lineTo(sx + tw * 0.4, sy - top + th * 0.4);
+      ctx.stroke();
+    }
+    ctx.restore();
+  });
+  // Jars and a basket in the middle of the square.
+  for (let n = 0; n < 3; n++) {
+    const [x, y] = k.at(0.85 + n * 0.12, 1.0 + rng.float(-0.1, 0.1));
+    ctx.fillStyle = '#b3653f';
+    ctx.beginPath();
+    ctx.ellipse(x, y - 3 * sc, 2.4 * sc, 3.4 * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawStorageYard(ctx: CanvasRenderingContext2D, ox: number, oy: number, s: number, tw: number, th: number, sc: number, rng: RNG): void {
+  const k = footprintKit(ctx, ox, oy, tw, th, sc);
+  const mud = '#b89a6c';
+  k.floor(0.05, 0.05, s - 0.1, s - 0.1, '#c7ad82');
+  k.wall(k.at(0.05, s - 0.05), k.at(0.05, 0.05), 8, shade(mud, 0.86), mix(mud, '#ffffff', 0.25));
+  k.wall(k.at(0.05, 0.05), k.at(s - 0.05, 0.05), 8, shade(mud, 0.66), mix(mud, '#ffffff', 0.25));
+  // An open-fronted shed along the back.
+  k.box(0.12, 0.12, 0.9, 14, '#9a7f52', shade(mud, 0.62), shade(mud, 0.84));
+  k.box(1.05, 0.12, 0.9, 14, '#9a7f52', shade(mud, 0.62), shade(mud, 0.84));
+  // Piles of goods: crates, stacked brick, logs, jars.
+  const piles: [number, number, string][] = [
+    [0.5, 1.3, 'crates'], [1.4, 1.2, 'bricks'], [2.2, 1.0, 'logs'],
+    [0.6, 2.2, 'jars'], [1.5, 2.1, 'crates'], [2.3, 2.0, 'stone'],
+  ];
+  piles.sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
+  for (const [fx, fy, kind] of piles) {
+    const [x, y] = k.at(fx, fy);
+    if (kind === 'crates') {
+      for (let j = 0; j < 3; j++) {
+        const cx = x + (j - 1) * 5 * sc, cy = y - (j === 1 ? 6 : 0) * sc;
+        isoBox(ctx, cx, cy - 4 * sc, 0.13, 5 * sc, '#c9a46a', '#8a6a40', '#a8844e', tw, th);
+      }
+    } else if (kind === 'bricks') {
+      isoBox(ctx, x, y - 4 * sc, 0.3, 7 * sc, '#b0704a', '#7a4a30', '#94603e', tw, th);
+    } else if (kind === 'logs') {
+      ctx.fillStyle = '#7a5433';
+      for (let j = 0; j < 4; j++) {
+        ctx.beginPath();
+        ctx.ellipse(x - 6 * sc + j * 4 * sc, y - 3 * sc - (j % 2) * 3 * sc, 2.6 * sc, 2.2 * sc, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#c49a62';
+      ctx.beginPath();
+      ctx.arc(x + 6 * sc, y - 3 * sc, 1.4 * sc, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (kind === 'jars') {
+      for (let j = 0; j < 4; j++) {
+        ctx.fillStyle = j % 2 ? '#b3653f' : '#c27a4a';
+        ctx.beginPath();
+        ctx.ellipse(x - 6 * sc + j * 4 * sc, y - 4 * sc, 2.2 * sc, 3.6 * sc, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      isoBox(ctx, x, y - 4 * sc, 0.26, 6 * sc, '#d8d0bc', '#9a9280', '#bab29c', tw, th);
+    }
+    void rng;
+  }
+  k.wall(k.at(0.05, s - 0.05), k.at(s * 0.4, s - 0.05), 8, shade(mud, 0.66), mix(mud, '#ffffff', 0.25));
+  k.wall(k.at(s * 0.6, s - 0.05), k.at(s - 0.05, s - 0.05), 8, shade(mud, 0.66), mix(mud, '#ffffff', 0.25));
+  k.wall(k.at(s - 0.05, 0.05), k.at(s - 0.05, s - 0.05), 8, shade(mud, 0.86), mix(mud, '#ffffff', 0.25));
+}
+
+function drawWaterSupply(ctx: CanvasRenderingContext2D, ox: number, oy: number, s: number, tw: number, th: number, sc: number): void {
+  const k = footprintKit(ctx, ox, oy, tw, th, sc);
+  const stone = '#cfc2a2';
+  k.floor(0.05, 0.05, s - 0.1, s - 0.1, '#c8b892');
+  // The cistern house at the back.
+  k.box(0.12, 0.12, 0.95, 18, mix(stone, '#ffffff', 0.2), shade(stone, 0.64), shade(stone, 0.88));
+  // A blue band and the doorway.
+  const [dx, dy] = k.at(1.07, 0.6);
+  ctx.fillStyle = '#2b2116';
+  ctx.fillRect(dx - 2 * sc, dy - 9 * sc, 4 * sc, 9 * sc);
+  // The open basin in front, stone-rimmed, full of water.
+  const rim = (fx: number, fy: number, w: number) => k.floor(fx, fy, w, w, shade(stone, 0.8));
+  rim(0.95, 0.95, 0.95);
+  k.floor(1.03, 1.03, 0.79, 0.79, '#4f93a3');
+  const [wx, wy] = k.at(1.3, 1.25);
+  ctx.fillStyle = 'rgba(220,240,240,0.55)';
+  ctx.beginPath();
+  ctx.ellipse(wx, wy, 6 * sc, 1.6 * sc, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Water jars waiting to be carried out.
+  for (let j = 0; j < 4; j++) {
+    const [x, y] = k.at(0.3 + j * 0.13, 1.55 + (j % 2) * 0.1);
+    ctx.fillStyle = j % 2 ? '#b3653f' : '#c27a4a';
+    ctx.beginPath();
+    ctx.ellipse(x, y - 3.5 * sc, 2.3 * sc, 3.5 * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawWorkCamp(ctx: CanvasRenderingContext2D, ox: number, oy: number, s: number, tw: number, th: number, sc: number, rng: RNG): void {
+  const k = footprintKit(ctx, ox, oy, tw, th, sc);
+  k.floor(0.05, 0.05, s - 0.1, s - 0.1, '#cbb084');
+  // Reed shelters: a ridge roof over two poles, back ones first.
+  const tents: [number, number][] = [[0.25, 0.2], [1.1, 0.25], [0.2, 1.05], [1.05, 1.1]];
+  for (const [fx, fy] of tents) {
+    const a = k.at(fx, fy + 0.25), b = k.at(fx + 0.6, fy + 0.25);
+    const c = k.at(fx + 0.6, fy + 0.6), d = k.at(fx, fy + 0.6);
+    const ridge = 11 * sc;
+    const mid1: [number, number] = [(a[0] + d[0]) / 2, (a[1] + d[1]) / 2 - ridge];
+    const mid2: [number, number] = [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2 - ridge];
+    k.poly([a, b, mid2, mid1], '#a88a5a');
+    k.poly([d, c, mid2, mid1], '#c9ac74');
+    ctx.strokeStyle = '#8a6e44';
+    ctx.lineWidth = 0.8 * sc;
+    for (let t = 0.15; t < 1; t += 0.2) {
+      ctx.beginPath();
+      ctx.moveTo(d[0] + (c[0] - d[0]) * t, d[1] + (c[1] - d[1]) * t);
+      ctx.lineTo(mid1[0] + (mid2[0] - mid1[0]) * t, mid1[1] + (mid2[1] - mid1[1]) * t);
+      ctx.stroke();
+    }
+  }
+  // A cooking fire and tools.
+  const [fx, fy] = k.at(1.0, 0.95);
+  ctx.fillStyle = '#5a4630';
+  ctx.beginPath();
+  ctx.ellipse(fx, fy, 4 * sc, 2 * sc, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#e08a3a';
+  ctx.beginPath();
+  ctx.moveTo(fx - 2 * sc, fy);
+  ctx.lineTo(fx, fy - 6 * sc);
+  ctx.lineTo(fx + 2 * sc, fy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#7a5a36';
+  ctx.lineWidth = 1.2 * sc;
+  for (let i = 0; i < 3; i++) {
+    const [x, y] = k.at(1.5 + rng.float(0, 0.3), 1.65 + i * 0.08);
+    ctx.beginPath();
+    ctx.moveTo(x - 5 * sc, y);
+    ctx.lineTo(x + 5 * sc, y - 2 * sc);
+    ctx.stroke();
   }
 }
 
@@ -862,75 +1173,86 @@ function drawStoneBuilding(ctx: CanvasRenderingContext2D, ox: number, oy: number
 }
 
 function drawTemple(ctx: CanvasRenderingContext2D, ox: number, oy: number, s: number, tw: number, th: number, h: number, sc: number, rng: RNG, def: BuildingDef): void {
-  const base = def.art.base;
-  const godColor = def.art.roof;
+  // Pharaoh's temple: a sanctuary hall behind a pylon gateway. The god's colour is on
+  // the flags and in a painted band, not slapped across the roof.
+  const stone = def.art.base;
+  const god = def.art.roof;
+  const k = footprintKit(ctx, ox, oy, tw, th, sc);
+  const lit = mix(stone, '#fff4dc', 0.22);
+  const dark = mix(shade(stone, 0.66), '#8a6438', 0.18);
+  const mid = shade(stone, 0.9);
 
-  // Raised platform.
-  isoBox(ctx, ox, oy, s * 0.95, h * 0.14, mix(base, '#000', 0.08), shade(base, 0.6), shade(base, 0.8), tw, th);
-
-  const bodyS = s * 0.72;
-  const bodyY = oy - h * 0.14;
-
-  // Battered (tapering) walls — the signature of Egyptian temple architecture.
-  isoTaper(ctx, ox, bodyY, bodyS, h * 0.72, 0.86,
-    mix(base, '#ffffff', 0.22), shade(base, 0.66), shade(base, 0.9), tw, th);
-
-  const hw = (bodyS * tw) / 2;
-  const hh = (bodyS * th) / 2;
-
-  // Cavetto cornice: a flared lip at the top.
-  const corniceY = bodyY - h * 0.72;
-  ctx.fillStyle = mix(base, '#ffffff', 0.32);
-  diamondPath(ctx, ox, corniceY - h * 0.06, bodyS * 1.06, tw, th);
-  ctx.fill();
-  ctx.fillStyle = godColor;
+  // Paved forecourt.
+  k.floor(0.04, 0.04, s - 0.08, s - 0.08, mix(stone, '#c8b48a', 0.5));
+  // The hall: battered walls, stepped back from the gate.
+  const hallS = s * 0.62;
+  const [hx, hy] = k.at(0.12, 0.12);
+  isoTaper(ctx, hx, hy, hallS, h * 0.62, 0.9, lit, dark, mid, tw, th);
+  // Cornice band in the god's colour.
+  ctx.save();
   ctx.globalAlpha = 0.85;
-  diamondPath(ctx, ox, corniceY - h * 0.1, bodyS * 0.92, tw, th);
-  ctx.fill();
-  ctx.globalAlpha = 1;
+  const top = hy - h * 0.62;
+  const cw = (hallS * 0.9 * tw) / 2, ch = (hallS * 0.9 * th) / 2;
+  ctx.strokeStyle = god;
+  ctx.lineWidth = 2 * sc;
+  ctx.beginPath();
+  ctx.moveTo(hx - cw, top + hallS * th * 0.5 + 1 * sc);
+  ctx.lineTo(hx, top + hallS * th * 0.5 + ch + 1 * sc);
+  ctx.lineTo(hx + cw, top + hallS * th * 0.5 + 1 * sc);
+  ctx.stroke();
+  ctx.restore();
+  // Columns along the hall's sunlit face.
+  {
+    const n = Math.max(3, Math.round(s * 2));
+    for (let i = 0; i <= n; i++) {
+      const [x, y] = k.at(0.12 + hallS + 0.06, 0.12 + (i / n) * hallS);
+      ctx.fillStyle = mix(stone, '#ffffff', 0.3);
+      ctx.fillRect(x - 1.5 * sc, y - h * 0.5, 3 * sc, h * 0.5);
+      ctx.fillStyle = god;
+      ctx.fillRect(x - 2.2 * sc, y - h * 0.5, 4.4 * sc, 2 * sc);
+    }
+  }
 
-  // Twin flagstaffs with the god's pennants.
-  for (const sx of [-1, 1]) {
-    const px = ox + sx * hw * 0.72;
-    const py = bodyY + hh + Math.abs(sx) * 0;
+  // The pylon gateway along the front edge: two tapering towers and a lintel.
+  const pS = Math.max(0.42, s * 0.24);
+  const gx = s - pS - 0.08;
+  const towers: [number, number][] = [[gx, s * 0.1], [gx, s * 0.9 - pS]];
+  // Flagstaffs stand before the towers; draw the far one first.
+  for (const [fx, fy] of towers) {
+    const [x, y] = k.at(fx, fy);
+    isoTaper(ctx, x, y, pS, h * 0.95, 0.72, lit, dark, mid, tw, th);
+    // Relief panel in the god's colour on the sunlit face.
+    const [px, py] = k.at(fx + pS, fy + pS * 0.5);
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = god;
+    ctx.fillRect(px - 2.5 * sc, py - h * 0.62, 5 * sc, h * 0.3);
+    ctx.restore();
+  }
+  // Lintel between the towers, over the doorway.
+  {
+    const a = k.at(gx + pS * 0.6, s * 0.1 + pS), b2 = k.at(gx + pS * 0.6, s * 0.9 - pS);
+    k.poly([a, b2, [b2[0], b2[1] - h * 0.62], [a[0], a[1] - h * 0.62]], '#2b2116');
+    k.poly([[a[0], a[1] - h * 0.62], [b2[0], b2[1] - h * 0.62], [b2[0], b2[1] - h * 0.74], [a[0], a[1] - h * 0.74]], mid);
+  }
+  // Flagstaffs with pennants in the god's colour.
+  for (const [fx, fy] of towers) {
+    const [x, y] = k.at(fx + pS + 0.06, fy + pS * 0.5);
     ctx.strokeStyle = '#7a5f38';
-    ctx.lineWidth = 2 * sc;
+    ctx.lineWidth = 1.8 * sc;
     ctx.beginPath();
-    ctx.moveTo(px, py);
-    ctx.lineTo(px, py - h * 1.05);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - h * 1.35);
     ctx.stroke();
-    ctx.fillStyle = godColor;
+    ctx.fillStyle = god;
     ctx.beginPath();
-    ctx.moveTo(px, py - h * 1.05);
-    ctx.lineTo(px + 10 * sc, py - h * 0.98);
-    ctx.lineTo(px, py - h * 0.88);
+    ctx.moveTo(x, y - h * 1.35);
+    ctx.lineTo(x + 9 * sc, y - h * 1.28);
+    ctx.lineTo(x, y - h * 1.19);
     ctx.closePath();
     ctx.fill();
   }
-
-  // Entrance between two pylons on the south-east.
-  const ex = ox + hw * 0.3;
-  const ey = bodyY + hh * 1.55;
-  ctx.fillStyle = '#2b2116';
-  ctx.beginPath();
-  ctx.moveTo(ex - 4 * sc, ey);
-  ctx.lineTo(ex + 4 * sc, ey - 4 * sc);
-  ctx.lineTo(ex + 4 * sc, ey - 4 * sc - h * 0.4);
-  ctx.lineTo(ex - 4 * sc, ey - h * 0.4);
-  ctx.closePath();
-  ctx.fill();
-
-  // Painted register of glyph-like marks.
-  ctx.save();
-  ctx.globalAlpha = 0.5;
-  ctx.fillStyle = godColor;
-  for (let i = 0; i < 6; i++) {
-    const t = 0.15 + i * 0.12;
-    const px = ox + hw * t;
-    const py = bodyY + hh * 2 - hh * t - h * 0.4;
-    ctx.fillRect(px - 1 * sc, py, 2 * sc, 4 * sc);
-  }
-  ctx.restore();
+  void rng;
 }
 
 function drawMonument(ctx: CanvasRenderingContext2D, ox: number, oy: number, s: number, tw: number, th: number, h: number, sc: number, rng: RNG, def: BuildingDef): void {
@@ -1799,17 +2121,14 @@ export function buildAtlas(onProgress?: (f: number) => void): Atlas {
       for (const [px, py] of [[cx, my - hh], [cx + hw, my], [cx, my + hh], [cx - hw, my]]) {
         ctx.fillRect(px - 0.9 * SC, py - 3.2 * SC, 1.8 * SC, 3.6 * SC);
       }
-      // Placard on a stake.
+      // A small placard on a stake — small enough that a district of fresh lots reads
+      // as surveyed ground rather than as a field of signs.
       ctx.fillStyle = '#7a5a36';
-      ctx.fillRect(cx - 0.8 * SC, my - 13 * SC, 1.6 * SC, 13 * SC);
-      ctx.fillStyle = '#e9dcbf';
-      ctx.fillRect(cx - 5 * SC, my - 17 * SC, 10 * SC, 6 * SC);
-      ctx.strokeStyle = '#7a5a36';
-      ctx.lineWidth = 0.9 * SC;
-      ctx.strokeRect(cx - 5 * SC, my - 17 * SC, 10 * SC, 6 * SC);
+      ctx.fillRect(cx - 0.6 * SC, my - 8 * SC, 1.2 * SC, 8 * SC);
+      ctx.fillStyle = '#e4d6b4';
+      ctx.fillRect(cx - 3.2 * SC, my - 11 * SC, 6.4 * SC, 3.8 * SC);
       ctx.fillStyle = '#9c6b3c';
-      ctx.fillRect(cx - 3 * SC, my - 15 * SC, 6 * SC, 0.9 * SC);
-      ctx.fillRect(cx - 3 * SC, my - 13.3 * SC, 4 * SC, 0.9 * SC);
+      ctx.fillRect(cx - 2 * SC, my - 9.6 * SC, 4 * SC, 0.7 * SC);
     },
   });
 

@@ -857,7 +857,7 @@ export const BUILDINGS: BuildingDef[] = [
     art: { style: 'stone', base: '#dcccA0', roof: '#8f7442', height: 28 },
   },
   {
-    id: 'work_camp', name: 'Work Camp', cat: 'food', size: 2, cost: 60, upkeep: 3, workers: 20,
+    id: 'work_camp', name: 'Work Camp', cat: 'food', size: 2, cost: 60, upkeep: 3, workers: 10,
     sector: 'food', needsRoad: true,
     desc: 'Peasants who walk out to plant and harvest the floodplain farms. While the river covers the fields they go to the monuments instead — which is why the great works rise during the flood.',
     desirability: D(-6, 4, 2),

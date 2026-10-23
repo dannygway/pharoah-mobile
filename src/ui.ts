@@ -993,7 +993,7 @@ export class UI {
     const c = this.game.city;
     const box = el('div', {});
     box.append(
-      el('p', { class: 'hint' }, 'Workers are handed out in this order. Drag a sector up to serve it first when labour is short.'),
+      el('p', { class: 'hint' }, 'When labour is short every sector still gets a share, but those near the top of this list keep more of their workers. Move a sector up to protect it.'),
       row('Workforce', String(c.workforce)),
       row('Employed', String(c.employed)),
       row('Jobs needing workers', String(c.stats.workersNeeded)),

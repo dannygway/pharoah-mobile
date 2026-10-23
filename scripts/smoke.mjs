@@ -154,8 +154,8 @@ const built = await page.evaluate(() => {
   // Wells are not in this list: they serve a radius, so they go inside the housing
   // cells rather than in the civic centre where they would reach nobody.
   // Sized to a labour budget this district can actually meet: granary 5, bazaar 5,
-  // water 4, temple 6, firehouse 5, and a work camp of 20 whose peasants work the two
-  // floodplain farms — which, as in Pharaoh, hire no one themselves. Forty-five jobs.
+  // water 4, temple 6, firehouse 5, and a work camp of 10 whose peasants work the two
+  // floodplain farms — which, as in Pharaoh, hire no one themselves. Thirty-five jobs.
   const wanted = [
     'granary', 'bazaar', 'water_supply', 'temple_osiris', 'firehouse', 'work_camp',
   ];

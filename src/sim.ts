@@ -658,7 +658,10 @@ export class City {
       if (b.walkerCooldown > 0) b.walkerCooldown--;
       else if (b.walkers.length < this.maxWalkersFor(def)) {
         if (this.walkers.spawnFrom(b, def)) {
-          b.walkerCooldown = Math.max(30, Math.round((def.walkerInterval ?? 240) / Math.max(0.35, b.staffing)));
+          // A fully staffed building sends its next walker soon after the last one
+          // sets out, as Pharaoh's do: patrols are near-continuous, streets are busy,
+          // and coverage holds steady instead of flickering in and out.
+          b.walkerCooldown = Math.max(30, Math.round((def.walkerInterval ?? 240) * 0.5 / Math.max(0.35, b.staffing)));
         } else {
           b.walkerCooldown = 60;
         }
@@ -695,7 +698,7 @@ export class City {
   private maxWalkersFor(def: BuildingDef): number {
     if (def.id === 'bazaar') return 5;
     if (def.cat === 'religion') return 3;
-    return 2;
+    return 3;
   }
 
   /** Ticks of progress this building earns this tick. */
@@ -1009,34 +1012,73 @@ export class City {
       ...this.laborPriority,
       ...[...bySector.keys()].filter((k) => !this.laborPriority.includes(k)),
     ];
-    for (const sector of order) {
-      const arr = bySector.get(sector);
-      if (!arr) continue;
+
+    /*
+     * Share the workforce the way Pharaoh does: in a shortage every sector gets a
+     * share, and the priority order only tilts it — a sector near the top keeps more of
+     * its staff than one near the bottom, but nothing is starved outright.
+     *
+     * The earlier allocator filled sectors strictly in order. In a young town that
+     * meant the first two sectors took every worker, the bazaar got none, no food
+     * reached anyone, no settlers came, and so no workers ever arrived to fix it: a
+     * deadlock the player could only break by knowing to reorder the labour advisor.
+     *
+     * Water-filling: each sector gets fraction min(1, λ·weight) of what it wants, with
+     * λ raised until the pool is spent. Sectors whose share would exceed what they need
+     * are filled and leave the calculation; the rest share what remains.
+     */
+    const sectors = order.filter((k) => bySector.has(k)).map((k, rank) => {
+      const arr = bySector.get(k)!;
       let want = 0;
       for (const b of arr) want += this.def(b).workers;
-      if (want <= 0) continue;
+      return { arr, want, weight: 1 / (1 + 0.35 * rank), frac: 0 };
+    }).filter((x) => x.want > 0);
 
-      if (want <= pool) {
-        for (const b of arr) {
-          const def = this.def(b);
-          b.workers = def.workers;
-          b.staffing = 1;
-        }
-        pool -= want;
-      } else {
-        // The sector is short. Every building in it runs at the same reduced
-        // efficiency rather than the first few running fully while the rest stand
-        // idle — a half-staffed district is recoverable, a dead one is not.
-        const ratio = pool / want;
-        for (const b of arr) {
-          const def = this.def(b);
-          const give = Math.floor(def.workers * ratio);
-          b.workers = give;
-          b.staffing = def.workers ? give / def.workers : 1;
-        }
-        pool = 0;
+    let open = sectors.slice();
+    let remaining = pool;
+    while (open.length && remaining > 0) {
+      const demand = open.reduce((a, x) => a + x.weight * x.want, 0);
+      const lambda = remaining / demand;
+      const full = open.filter((x) => lambda * x.weight >= 1);
+      if (!full.length) {
+        for (const x of open) x.frac = lambda * x.weight;
+        remaining = 0;
+        break;
+      }
+      for (const x of full) {
+        x.frac = 1;
+        remaining -= x.want;
+      }
+      open = open.filter((x) => x.frac < 1);
+    }
+
+    pool = this.workforce;
+    const short: { b: Building; rem: number }[] = [];
+    for (const x of sectors) {
+      for (const b of x.arr) {
+        const def = this.def(b);
+        const exact = x.frac >= 1 ? def.workers : def.workers * x.frac;
+        const give = Math.floor(exact);
+        b.workers = give;
+        pool -= give;
+        if (give < def.workers) short.push({ b, rem: exact - give });
       }
     }
+    // Rounding each building down strands a worker or two per sector; hand them out to
+    // the buildings that were closest to earning one.
+    short.sort((a, b) => b.rem - a.rem);
+    for (const { b } of short) {
+      if (pool <= 0) break;
+      b.workers++;
+      pool--;
+    }
+    for (const x of sectors) {
+      for (const b of x.arr) {
+        const def = this.def(b);
+        b.staffing = def.workers ? b.workers / def.workers : 1;
+      }
+    }
+    pool = Math.max(0, pool);
 
     this.employed = this.workforce - pool;
     this.stats.workersNeeded = needed;
