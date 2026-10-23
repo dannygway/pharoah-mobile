@@ -448,10 +448,11 @@ export class UI {
     if (b.house) {
       const h = b.house;
       body.append(
-        row('Residents', `${h.people} / ${HOUSING[h.level].capacity}`),
+        row('Residents', `${h.people} / ${c.houseCapacity(b)}`),
         row('Health', `${Math.round(h.health)}%`),
-        row('Desirability', String(c.world.desirability[c.world.idx(b.x, b.y)])),
+        row('Desirability', String(c.houseDesirability(b))),
       );
+      if (b.size > 1) body.append(row('Plot', `${b.size}×${b.size}`));
       if (h.blocker) body.append(el('div', { class: 'blocker' }, `Cannot advance: ${h.blocker}`));
       const foods = FOOD_IDS.filter((f) => (h.foods[f] ?? 0) > 0.05);
       if (foods.length) {
@@ -634,7 +635,7 @@ export class UI {
       const h = b.house;
       const lvl = HOUSING[h.level];
       body.append(el('h4', {}, `${lvl.name} · level ${h.level} of 20`));
-      body.append(row('Residents', `${h.people} / ${lvl.capacity}`));
+      body.append(row('Residents', `${h.people} / ${this.game.city.houseCapacity(b)}`));
       body.append(row('Tax yield', `${(h.people * lvl.taxPerPerson).toFixed(1)} deben/month`));
       body.append(row('Assessed', h.taxFresh > 0 ? 'Yes' : 'No — no tax collector has called'));
       body.append(el('h4', {}, 'Services received'));

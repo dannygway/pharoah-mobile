@@ -209,6 +209,22 @@ const G_ALL2: GoodId[] = ['pottery', 'beer', 'linen', 'luxury', 'chests'];
  * is a large change to placement and rendering; instead every house stays 1x1 and the
  * per-tile capacity ramps to compensate. The requirement ladder itself is faithful.
  */
+/**
+ * The footprint a house must occupy to hold a level, as in Pharaoh: anything up to an
+ * apartment fits on one tile, a residence needs 2×2, a manor 3×3, an estate 4×4. A
+ * house grows by absorbing the housing around it, so blocks must be planned in these
+ * multiples from the start — a fine house hemmed in by roads simply stops.
+ */
+export function houseMinSize(level: number): number {
+  return level >= 19 ? 4 : level >= 15 ? 3 : level >= 11 ? 2 : 1;
+}
+
+/**
+ * Capacities are per house at that level's minimum footprint. Elite housing is
+ * roomier — four apartments of 36 become a residence of 120, not 144 — so density
+ * falls gently toward the top of the ladder, as in the original, without the cliff
+ * that per-tile numbers from the small houses would have produced.
+ */
 export const HOUSING: HousingLevel[] = [
   { level: 0,  name: 'Vacant Lot',          capacity: 0,   desirability: -99, desirabilityMax: 999, water: 0, foodTypes: 0, gods: 0, goods: NO_GOODS,      education: 0, entertainment: 0, health: 0, magistrate: false, scribes: false, taxPerPerson: 0,    prosperity: 0 },
   { level: 1,  name: 'Crude Hut',           capacity: 6,   desirability: -22, desirabilityMax: 14,  water: 1, foodTypes: 0, gods: 0, goods: NO_GOODS,      education: 0, entertainment: 0, health: 0, magistrate: false, scribes: false, taxPerPerson: 0.10, prosperity: 0 },
@@ -221,16 +237,16 @@ export const HOUSING: HousingLevel[] = [
   { level: 8,  name: 'Spacious Homestead',  capacity: 28,  desirability: 6,   desirabilityMax: 56,  water: 2, foodTypes: 1, gods: 1, goods: G_POT_BEER,    education: 0, entertainment: 2, health: 1, magistrate: false, scribes: false, taxPerPerson: 0.50, prosperity: 25 },
   { level: 9,  name: 'Modest Apartment',    capacity: 32,  desirability: 10,  desirabilityMax: 62,  water: 2, foodTypes: 1, gods: 1, goods: G_POT_BEER,    education: 0, entertainment: 2, health: 1, magistrate: true,  scribes: false, taxPerPerson: 0.60, prosperity: 30 },
   { level: 10, name: 'Spacious Apartment',  capacity: 36,  desirability: 14,  desirabilityMax: 68,  water: 2, foodTypes: 1, gods: 1, goods: G_POT_BEER,    education: 1, entertainment: 2, health: 1, magistrate: true,  scribes: false, taxPerPerson: 0.70, prosperity: 35 },
-  { level: 11, name: 'Common Residence',    capacity: 40,  desirability: 19,  desirabilityMax: 74,  water: 2, foodTypes: 2, gods: 1, goods: G_POT_BEER,    education: 1, entertainment: 2, health: 2, magistrate: true,  scribes: false, taxPerPerson: 0.82, prosperity: 41 },
-  { level: 12, name: 'Spacious Residence',  capacity: 44,  desirability: 24,  desirabilityMax: 80,  water: 2, foodTypes: 2, gods: 1, goods: G_POT_BEER_LIN, education: 1, entertainment: 2, health: 2, magistrate: true, scribes: false, taxPerPerson: 0.95, prosperity: 47 },
-  { level: 13, name: 'Elegant Residence',   capacity: 48,  desirability: 29,  desirabilityMax: 86,  water: 2, foodTypes: 2, gods: 2, goods: G_POT_BEER_LIN, education: 1, entertainment: 2, health: 2, magistrate: true, scribes: false, taxPerPerson: 1.10, prosperity: 54 },
-  { level: 14, name: 'Fancy Residence',     capacity: 52,  desirability: 34,  desirabilityMax: 92,  water: 2, foodTypes: 2, gods: 2, goods: G_ALL,         education: 1, entertainment: 3, health: 2, magistrate: true,  scribes: false, taxPerPerson: 1.28, prosperity: 62 },
-  { level: 15, name: 'Common Manor',        capacity: 58,  desirability: 40,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 2, goods: G_ALL,         education: 1, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 1.85, prosperity: 70 },
-  { level: 16, name: 'Spacious Manor',      capacity: 64,  desirability: 46,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL,         education: 2, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.15, prosperity: 79 },
-  { level: 17, name: 'Elegant Manor',       capacity: 70,  desirability: 53,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL,         education: 2, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.50, prosperity: 88 },
-  { level: 18, name: 'Stately Manor',       capacity: 76,  desirability: 60,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.90, prosperity: 97 },
-  { level: 19, name: 'Modest Estate',       capacity: 86,  desirability: 68,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 3.40, prosperity: 106 },
-  { level: 20, name: 'Palatial Estate',     capacity: 100, desirability: 76,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 4.00, prosperity: 118 },
+  { level: 11, name: 'Common Residence',    capacity: 120,  desirability: 19,  desirabilityMax: 74,  water: 2, foodTypes: 2, gods: 1, goods: G_POT_BEER,    education: 1, entertainment: 2, health: 2, magistrate: true,  scribes: false, taxPerPerson: 0.82, prosperity: 41 },
+  { level: 12, name: 'Spacious Residence',  capacity: 128,  desirability: 24,  desirabilityMax: 80,  water: 2, foodTypes: 2, gods: 1, goods: G_POT_BEER_LIN, education: 1, entertainment: 2, health: 2, magistrate: true, scribes: false, taxPerPerson: 0.95, prosperity: 47 },
+  { level: 13, name: 'Elegant Residence',   capacity: 136,  desirability: 29,  desirabilityMax: 86,  water: 2, foodTypes: 2, gods: 2, goods: G_POT_BEER_LIN, education: 1, entertainment: 2, health: 2, magistrate: true, scribes: false, taxPerPerson: 1.10, prosperity: 54 },
+  { level: 14, name: 'Fancy Residence',     capacity: 144,  desirability: 34,  desirabilityMax: 92,  water: 2, foodTypes: 2, gods: 2, goods: G_ALL,         education: 1, entertainment: 3, health: 2, magistrate: true,  scribes: false, taxPerPerson: 1.28, prosperity: 62 },
+  { level: 15, name: 'Common Manor',        capacity: 180,  desirability: 40,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 2, goods: G_ALL,         education: 1, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 1.85, prosperity: 70 },
+  { level: 16, name: 'Spacious Manor',      capacity: 190,  desirability: 46,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL,         education: 2, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.15, prosperity: 79 },
+  { level: 17, name: 'Elegant Manor',       capacity: 200,  desirability: 53,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL,         education: 2, entertainment: 3, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.50, prosperity: 88 },
+  { level: 18, name: 'Stately Manor',       capacity: 210,  desirability: 60,  desirabilityMax: 999, water: 2, foodTypes: 2, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 2.90, prosperity: 97 },
+  { level: 19, name: 'Modest Estate',       capacity: 220,  desirability: 68,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 3.40, prosperity: 106 },
+  { level: 20, name: 'Palatial Estate',     capacity: 240, desirability: 76,  desirabilityMax: 999, water: 2, foodTypes: 3, gods: 3, goods: G_ALL2,        education: 2, entertainment: 4, health: 3, magistrate: true,  scribes: true,  taxPerPerson: 4.00, prosperity: 118 },
 ];
 
 // ---------------------------------------------------------------------------

@@ -364,9 +364,16 @@ export class Scene {
       const lvl = b.house.level;
       if (lvl === 0 || b.house.people === 0) {
         r.draw(a.get('house_empty'), wx, wy, 1, tR, tG, tB, 1);
-      } else {
+      } else if (b.size === 1) {
         const tier = lvl <= 2 ? 0 : lvl <= 6 ? 1 : lvl <= 10 ? 2 : lvl <= 15 ? 3 : 4;
         r.draw(a.get(`house_${tier}`), wx, wy, 1, tR, tG, tB, 1);
+      } else {
+        // A house that has grown onto a larger plot.
+        const kind =
+          b.size === 2 ? (lvl <= 6 ? 'cluster' : lvl <= 10 ? 'cluster2' : lvl <= 12 ? 'residence' : 'residence2') :
+          b.size === 3 ? (lvl <= 16 ? 'manor' : 'manor2') :
+          (lvl <= 19 ? 'estate' : 'estate2');
+        r.draw(a.get(`house_${kind}`), wx, wy, 1, tR, tG, tB, 1);
       }
     } else if (b.monument && !b.monument.complete) {
       // Unfinished monuments rise out of the ground as the stages complete.

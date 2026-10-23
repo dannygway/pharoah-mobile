@@ -682,7 +682,7 @@ export class Game {
       buildings: c.liveBuildings.map((id) => {
         const b = c.buildings[id]!;
         return {
-          id: b.id, defId: b.defId, x: b.x, y: b.y, built: b.built,
+          id: b.id, defId: b.defId, x: b.x, y: b.y, size: b.size, built: b.built,
           progress: b.progress, store: b.store, fire: b.fire, damage: b.damage,
           enabled: b.enabled, variant: b.variant, age: b.age,
           house: b.house, monument: b.monument, garrison: b.garrison, orders: b.orders,
@@ -737,7 +737,7 @@ export class Game {
         const def = BUILDING_BY_ID[bs.defId];
         if (!def) continue;
         const b: Building = {
-          id: bs.id, defId: bs.defId, x: bs.x, y: bs.y, size: def.size,
+          id: bs.id, defId: bs.defId, x: bs.x, y: bs.y, size: bs.size ?? def.size,
           built: bs.built, workers: 0, staffing: 0, progress: bs.progress,
           store: bs.store ?? {}, fire: bs.fire, damage: bs.damage,
           walkerCooldown: 0, walkers: [], hasRoad: false, enabled: bs.enabled !== false,
@@ -747,8 +747,8 @@ export class Game {
         b.campFarm = c.isCampFarm(def, b.x, b.y);
         c.buildings[b.id] = b;
         c.liveBuildings.push(b.id);
-        for (let dy = 0; dy < def.size; dy++) {
-          for (let dx = 0; dx < def.size; dx++) {
+        for (let dy = 0; dy < b.size; dy++) {
+          for (let dx = 0; dx < b.size; dx++) {
             if (this.world.inBounds(b.x + dx, b.y + dy)) {
               this.world.building[this.world.idx(b.x + dx, b.y + dy)] = b.id;
             }

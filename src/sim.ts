@@ -9,7 +9,7 @@
 import { RNG, clamp, approach } from './core';
 import {
   BUILDING_BY_ID, BuildingDef, GOODS, GoodId, FOOD_IDS, HOUSEHOLD_GOODS, HOUSING,
-  ServiceId, GodId, GOD_IDS, GODS, RELIGION_SERVICE, LaborSector, seasonOfMonth, Season, MONTHS,
+  ServiceId, GodId, GOD_IDS, GODS, RELIGION_SERVICE, LaborSector, seasonOfMonth, Season, MONTHS, houseMinSize,
 } from './data';
 import { World, Terrain } from './world';
 import { TICKS_PER_MONTH, TICKS_PER_YEAR, TICKS_PER_DAY, SERVICE_DURATION as SVC_TICKS } from './consts';
@@ -311,6 +311,95 @@ export class City {
       }
     }
     return fp * 2 > def.size * def.size;
+  }
+
+  /** People a house can hold: its level's capacity, scaled by any extra footprint. */
+  houseCapacity(b: Building): number {
+    const lvl = Math.max(1, b.house?.level ?? 1);
+    const min = houseMinSize(lvl);
+    return Math.round(HOUSING[lvl].capacity * (b.size * b.size) / (min * min));
+  }
+
+  /** A house's desirability is the mean across its whole plot, not its corner tile. */
+  houseDesirability(b: Building): number {
+    const w = this.world;
+    let sum = 0;
+    for (let dy = 0; dy < b.size; dy++) {
+      for (let dx = 0; dx < b.size; dx++) sum += w.desirability[w.idx(b.x + dx, b.y + dy)];
+    }
+    return Math.round(sum / (b.size * b.size));
+  }
+
+  /**
+   * Grow a house to an m×m plot by absorbing the housing around it.
+   *
+   * Every tile of the new plot must already be housing — vacant lots or homes no
+   * grander than this one — lying wholly inside the square. Roads, gardens, wells and
+   * any other building all block it. The absorbed households move in, up to the new
+   * home's capacity. Returns false if no such square exists around this house.
+   */
+  private tryGrowHouse(b: Building, m: number): boolean {
+    const w = this.world;
+    const h = b.house!;
+    for (let oy = b.y + b.size - m; oy <= b.y; oy++) {
+      for (let ox = b.x + b.size - m; ox <= b.x; ox++) {
+        if (!w.inBounds(ox, oy) || !w.inBounds(ox + m - 1, oy + m - 1)) continue;
+        const absorbed = new Set<number>();
+        let ok = true;
+        for (let dy = 0; dy < m && ok; dy++) {
+          for (let dx = 0; dx < m && ok; dx++) {
+            const id = w.building[w.idx(ox + dx, oy + dy)];
+            const o = id >= 0 ? this.buildings[id] : null;
+            if (!o?.house) { ok = false; break; }
+            if (o.x < ox || o.y < oy || o.x + o.size > ox + m || o.y + o.size > oy + m) { ok = false; break; }
+            if (o !== b && o.house.level > h.level) { ok = false; break; }
+            if (o !== b) absorbed.add(id);
+          }
+        }
+        if (!ok) continue;
+
+        let people = h.people;
+        let healthSum = h.health * Math.max(1, h.people);
+        let weight = Math.max(1, h.people);
+        for (const id of absorbed) {
+          const o = this.buildings[id]!;
+          const oh = o.house!;
+          people += oh.people;
+          healthSum += oh.health * Math.max(1, oh.people);
+          weight += Math.max(1, oh.people);
+          for (const [g, v] of Object.entries(oh.foods)) h.foods[g as GoodId] = (h.foods[g as GoodId] ?? 0) + (v ?? 0);
+          for (const [g, v] of Object.entries(oh.goods)) h.goods[g as GoodId] = (h.goods[g as GoodId] ?? 0) + (v ?? 0);
+          for (const [k, v] of Object.entries(oh.services)) {
+            h.services[k as ServiceId] = Math.max(h.services[k as ServiceId] ?? 0, v ?? 0);
+          }
+          h.taxFresh = Math.max(h.taxFresh, oh.taxFresh);
+          for (const wid of o.walkers) this.walkers.kill(wid);
+          this.buildings[id] = null;
+          this.freeBuildingIds.push(id);
+          const li = this.liveBuildings.indexOf(id);
+          if (li >= 0) this.liveBuildings.splice(li, 1);
+          this.countsByDef.set('house', Math.max(0, this.countOf('house') - 1));
+        }
+        b.x = ox;
+        b.y = oy;
+        b.size = m;
+        for (let dy = 0; dy < m; dy++) {
+          for (let dx = 0; dx < m; dx++) w.building[w.idx(ox + dx, oy + dy)] = b.id;
+        }
+        h.health = healthSum / weight;
+        const cap = this.houseCapacity(b);
+        if (people > cap) {
+          // Those who cannot fit find somewhere else, or leave.
+          this.population -= people - cap;
+          people = cap;
+        }
+        h.people = people;
+        this.refreshRoadAccess(b);
+        this.desirabilityDirty = true;
+        return true;
+      }
+    }
+    return false;
   }
 
   /** How many of the city's workers this building wants. */
@@ -1029,7 +1118,7 @@ export class City {
       const b = this.buildings[id];
       if (!b?.house) continue;
       const h = b.house;
-      const des = this.world.desirability[this.world.idx(b.x, b.y)];
+      const des = this.houseDesirability(b);
 
       // An unoccupied lot with any desirability at all attracts a first hut.
       if (h.level === 0) {
@@ -1043,7 +1132,7 @@ export class City {
       if (curFail) {
         h.level = Math.max(1, h.level - 1);
         h.blocker = curFail;
-        const cap = HOUSING[h.level].capacity;
+        const cap = this.houseCapacity(b);
         if (h.people > cap) {
           const evicted = h.people - cap;
           h.people = cap;
@@ -1058,19 +1147,37 @@ export class City {
       }
       const next = HOUSING[h.level + 1];
       const nextFail = this.housingFailure(b, h, next, des);
-      if (!nextFail) {
-        h.level++;
-        h.blocker = '';
-      } else {
+      if (nextFail) {
         h.blocker = nextFail;
+        continue;
       }
+      // Ready in every other respect: now it needs the ground to stand on.
+      const need = houseMinSize(next.level);
+      if (b.size < need) {
+        // Take the smallest plot that fits, but accept a larger one: a block of four
+        // residences has no 3×3 square that lies wholly around any one of them, and
+        // without this the whole block would be stuck at residence for ever.
+        let grew = false;
+        for (let m = need; m <= 4 && !grew; m++) grew = this.tryGrowHouse(b, m);
+        if (grew) {
+          h.blocker = 'Expanding';
+        } else {
+          h.blocker = `No room to expand: a ${next.name.toLowerCase()} needs a ${need}×${need} plot, ` +
+            `and the land around this house is not all housing. Roads, gardens and other buildings block it.`;
+        }
+        continue;
+      }
+      h.level++;
+      h.blocker = '';
     }
   }
 
   /** Returns a human-readable reason the house fails `lvl`, or '' if it meets it. */
   private housingFailure(b: Building, h: HouseState, lvl: typeof HOUSING[number], des: number): string {
     if (des < lvl.desirability) return `Desirability is ${des} and it needs ${lvl.desirability} — plant gardens, or move the industry away`;
-    if (des > lvl.desirabilityMax) return `Too desirable to stay a ${lvl.name.toLowerCase()}`;
+    // There is deliberately no ceiling. An earlier version failed a house's *current*
+    // level when its plot was too pleasant for it, and because the current level is
+    // checked before the next one, a hut beside a garden could never advance at all.
 
     if (lvl.water === 1 && !h.services.wellWater && !h.services.water) return 'No water — no well covers it and no water carrier calls';
     if (lvl.water === 2 && !h.services.water) return 'Needs a water supply, a well is not enough';
@@ -1169,7 +1276,7 @@ export class City {
     for (const id of this.liveBuildings) {
       const b = this.buildings[id];
       if (!b?.house) continue;
-      const cap = HOUSING[b.house.level].capacity || HOUSING[1].capacity;
+      const cap = this.houseCapacity(b);
       capacity += cap;
       housed += b.house.people;
       if (b.house.people < cap && b.hasRoad) bestLots.push(b);

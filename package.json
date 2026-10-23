@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "smoke": "npm run build && node scripts/smoke.mjs",
     "standalone": "npm run build && node scripts/standalone.mjs",
-    "soak": "npm run build && node scripts/soak.mjs"
+    "soak": "npm run build && node scripts/soak.mjs",
+    "test:housing": "npm run build && node scripts/housing.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

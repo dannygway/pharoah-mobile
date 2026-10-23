@@ -1229,6 +1229,205 @@ function drawHouse(ctx: CanvasRenderingContext2D, ox: number, oy: number, tw: nu
   ctx.fill();
 }
 
+/**
+ * A house that has grown past one tile.
+ *
+ * Pharaoh's better housing is a walled compound, not a bigger hut: a perimeter wall,
+ * a main block that rises a storey or two, and an open courtyard with a pool and
+ * palms. 'kind' picks the scale of it. Everything is drawn back to front inside the
+ * sprite so the front wall correctly hides the courtyard floor behind it.
+ */
+function drawCompound(
+  ctx: CanvasRenderingContext2D, ox: number, oy: number, S: number,
+  tw: number, th: number, sc: number, rng: RNG,
+  kind: 'cluster' | 'cluster2' | 'residence' | 'residence2' | 'manor' | 'manor2' | 'estate' | 'estate2',
+): void {
+  // Ground point for fractional tile coordinates inside this footprint.
+  const at = (fx: number, fy: number): [number, number] => [ox + (fx - fy) * tw / 2, oy + (fx + fy) * th / 2];
+
+  if (kind === 'cluster' || kind === 'cluster2') {
+    // Four small homes sharing one plot: drawn back to front.
+    const tier = kind === 'cluster' ? 1 : 2;
+    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+      const [x, y] = at(dx, dy);
+      drawHouse(ctx, x, y, tw, th, sc, new RNG(rng.int(1e6)), tier);
+    }
+    return;
+  }
+
+  const palette = {
+    residence:  { wall: '#e6d8b8', roof: '#c9b080', yard: '#d8c49a', band: '#b5543f', h: 20, wallH: 5 },
+    residence2: { wall: '#ece0c4', roof: '#cdb486', yard: '#dccaa2', band: '#3f6f9a', h: 23, wallH: 5 },
+    manor:      { wall: '#efe4ca', roof: '#d0b98c', yard: '#d9c79f', band: '#b5543f', h: 26, wallH: 6 },
+    manor2:     { wall: '#f2e8d0', roof: '#d4bd90', yard: '#dccaa4', band: '#3f6f9a', h: 28, wallH: 6 },
+    estate:     { wall: '#f4ebd6', roof: '#d8c296', yard: '#dccba6', band: '#3f6f9a', h: 30, wallH: 7 },
+    estate2:    { wall: '#f7efdc', roof: '#dcc59a', yard: '#e0cfa9', band: '#b08a2e', h: 32, wallH: 7 },
+  }[kind];
+  const lit = mix(palette.wall, '#ffffff', 0.2);
+  // Shadows on whitewash in strong sun go warm, not grey: bounce light off the sand.
+  const shadeL = mix(shade(palette.wall, 0.66), '#9a7448', 0.22);
+  const shadeR = mix(shade(palette.wall, 0.9), '#c49a62', 0.10);
+
+  // Courtyard floor across the whole plot.
+  const inset = 0.06;
+  const quad = (pts: [number, number][], fill: string) => {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.fill();
+  };
+  quad([at(inset, inset), at(S - inset, inset), at(S - inset, S - inset), at(inset, S - inset)], palette.yard);
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+  speckle(ctx, rng, ox - S * tw / 2, oy, S * tw, S * th, Math.round(30 * S * sc), ['#c2ab7e', '#efe2c4']);
+  ctx.restore();
+
+  // A wall run from a to b, wallH tall, with a lighter coping on top.
+  const wallH = palette.wallH * sc;
+  const wall = (a: [number, number], b: [number, number], face: string) => {
+    quad([a, b, [b[0], b[1] - wallH], [a[0], a[1] - wallH]], face);
+    ctx.strokeStyle = lit;
+    ctx.lineWidth = 1.2 * sc;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1] - wallH);
+    ctx.lineTo(b[0], b[1] - wallH);
+    ctx.stroke();
+  };
+  // Back walls first.
+  wall(at(inset, S - inset), at(inset, inset), shadeR);
+  wall(at(inset, inset), at(S - inset, inset), shadeL);
+
+  // Main house: a block across the back of the plot, a second storey on the larger.
+  const box = (fx: number, fy: number, size: number, h: number, top = palette.roof) => {
+    const [x, y] = at(fx, fy);
+    isoBox(ctx, x, y, size, h * sc, top, shadeL, shadeR, tw, th);
+    // Painted frieze just under the roof line on both faces.
+    ctx.save();
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = palette.band;
+    const hw = size * tw / 2, hh = size * th / 2, H = h * sc, bandY = H * 0.86, bandT = 1.6 * sc;
+    quad([[x - hw, y + hh - bandY], [x, y + 2 * hh - bandY], [x, y + 2 * hh - bandY - bandT], [x - hw, y + hh - bandY - bandT]], palette.band);
+    quad([[x, y + 2 * hh - bandY], [x + hw, y + hh - bandY], [x + hw, y + hh - bandY - bandT], [x, y + 2 * hh - bandY - bandT]], palette.band);
+    ctx.restore();
+    // Dark window slits on the sunlit face.
+    ctx.fillStyle = 'rgba(45,32,20,0.85)';
+    for (let k = 1; k <= Math.max(1, Math.round(size * 2)); k++) {
+      const t = k / (Math.round(size * 2) + 1);
+      const wx = x + hw * t, wy = y + 2 * hh - hh * t - H * 0.55;
+      ctx.fillRect(wx - 1 * sc, wy - 3 * sc, 2 * sc, 3.5 * sc);
+    }
+  };
+
+  const palm = (fx: number, fy: number, scale = 1) => {
+    const [x, y] = at(fx, fy);
+    const hgt = 22 * sc * scale;
+    ctx.strokeStyle = '#7a5a36';
+    ctx.lineWidth = 2 * sc * scale;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.quadraticCurveTo(x + 2 * sc, y - hgt * 0.5, x + 1 * sc, y - hgt);
+    ctx.stroke();
+    ctx.fillStyle = '#4e7a35';
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.ellipse(x + 1 * sc + Math.cos(a) * 5 * sc * scale, y - hgt + Math.sin(a) * 2.2 * sc * scale,
+        6 * sc * scale, 2 * sc * scale, a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#6a9a48';
+    ctx.beginPath();
+    ctx.arc(x + 1 * sc, y - hgt - 1 * sc, 2.2 * sc * scale, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  const pool = (fx: number, fy: number, size: number) => {
+    const [x, y] = at(fx, fy);
+    ctx.fillStyle = shade(palette.yard, 0.8);
+    diamondPath(ctx, x, y, size, tw, th);
+    ctx.fill();
+    ctx.fillStyle = '#4f93a3';
+    diamondPath(ctx, x, y + size * th * 0.08, size * 0.84, tw, th);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(220,240,240,0.5)';
+    diamondPath(ctx, x - size * tw * 0.08, y + size * th * 0.18, size * 0.3, tw, th);
+    ctx.fill();
+  };
+  const bed = (fx: number, fy: number, size: number) => {
+    const [x, y] = at(fx, fy);
+    ctx.fillStyle = '#6f8f45';
+    diamondPath(ctx, x, y, size, tw, th);
+    ctx.fill();
+    ctx.fillStyle = '#c9564a';
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.arc(x + rng.float(-size, size) * tw * 0.2, y + size * th * 0.5 + rng.float(-0.3, 0.3) * size * th, 1.2 * sc, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  if (kind === 'residence' || kind === 'residence2') {
+    box(0.12, 0.12, 1.15, palette.h);
+    box(0.3, 0.25, 0.7, palette.h + 10);
+    if (kind === 'residence2') {
+      // A roof terrace with a striped awning.
+      const [x, y] = at(0.45, 0.4);
+      ctx.fillStyle = '#c9564a';
+      diamondPath(ctx, x, y - (palette.h + 10) * sc - 4 * sc, 0.35, tw, th);
+      ctx.fill();
+    }
+    palm(1.55, 1.25, 0.8);
+    bed(1.2, 1.35, 0.35);
+  } else if (kind === 'manor' || kind === 'manor2') {
+    box(0.12, 0.12, 1.55, palette.h);
+    box(1.72, 0.12, 1.0, palette.h - 8);
+    box(0.35, 0.3, 0.9, palette.h + 12);
+    pool(1.55, 1.55, 0.85);
+    palm(2.5, 1.55);
+    palm(1.5, 2.55, 0.9);
+    if (kind === 'manor2') bed(2.2, 2.2, 0.45);
+  } else {
+    box(0.12, 0.12, 2.0, palette.h);
+    box(2.2, 0.12, 1.4, palette.h - 8);
+    box(0.4, 0.35, 1.3, palette.h + 14);
+    // A colonnade along the front of the main house.
+    {
+      const H = palette.h * sc;
+      for (let k = 0; k <= 5; k++) {
+        const [x, y] = at(0.12 + 2.0 + 0.12, 0.12 + (k / 5) * 2.0);
+        ctx.fillStyle = shade(palette.wall, 1.05);
+        ctx.fillRect(x - 1.4 * sc, y - H, 2.8 * sc, H);
+        ctx.fillStyle = '#4e8a5a';
+        ctx.fillRect(x - 2 * sc, y - H, 4 * sc, 2 * sc);
+      }
+    }
+    pool(2.3, 2.3, 1.2);
+    palm(3.4, 2.1);
+    palm(2.1, 3.4);
+    palm(3.5, 3.3, 0.85);
+    bed(1.2, 2.8, 0.6);
+    bed(2.8, 1.2, 0.5);
+    if (kind === 'estate2') {
+      // A gilded obelisk in the garden: the estate's own small monument.
+      const [x, y] = at(1.25, 2.3);
+      isoTaper(ctx, x, y, 0.22, 30 * sc, 0.4, '#e0c060', '#a8862e', '#c9a24a', tw, th);
+    }
+  }
+
+  // Front walls last, with a gateway in the south-west wall.
+  const g0 = S * 0.42, g1 = S * 0.58;
+  wall(at(inset, S - inset), at(g0, S - inset), shadeL);
+  wall(at(g1, S - inset), at(S - inset, S - inset), shadeL);
+  wall(at(S - inset, inset), at(S - inset, S - inset), shadeR);
+  // Gate posts.
+  for (const f of [g0, g1]) {
+    const [x, y] = at(f, S - inset);
+    ctx.fillStyle = lit;
+    ctx.fillRect(x - 1.5 * sc, y - wallH - 4 * sc, 3 * sc, wallH + 4 * sc);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Walkers
 // ---------------------------------------------------------------------------
@@ -1552,6 +1751,27 @@ export function buildAtlas(onProgress?: (f: number) => void): Atlas {
       },
     });
   }
+  // Grown houses: residences, manors and estates, plus four-home clusters for
+  // smaller houses that have ended up on a larger plot.
+  const compounds: [number, string][] = [
+    [2, 'cluster'], [2, 'cluster2'], [2, 'residence'], [2, 'residence2'],
+    [3, 'manor'], [3, 'manor2'], [4, 'estate'], [4, 'estate2'],
+  ];
+  for (const [S, kind] of compounds) {
+    const sc = SC;
+    const headroom = (36 + S * 10) * sc;
+    const w = S * TILE_W * sc;
+    const h = S * TILE_H * sc + headroom;
+    jobs.push({
+      name: `house_${kind}`,
+      w, h, scale: sc, ax: w / 2, ay: headroom,
+      draw: (ctx) => {
+        groundShadow(ctx, w / 2, headroom, S, TILE_W * sc, TILE_H * sc);
+        drawCompound(ctx, w / 2, headroom, S, TILE_W * sc, TILE_H * sc, sc, new RNG(S * 101 + kind.length), kind as any);
+      },
+    });
+  }
+
   // An empty, unclaimed housing lot: four corner pegs and a small placard on a stake,
   // the way a surveyor marks a plot. No fill — a district of lots waiting for settlers
   // should read as marked ground, not as a checkerboard.
