@@ -19,6 +19,7 @@ import { AudioEngine } from './audio';
 import { BUILDING_BY_ID, BuildingDef, GoodId, GOD_IDS, GOOD_RENAMES, BUILDING_RENAMES } from './data';
 import { TICKS_PER_MONTH, TICKS_PER_YEAR } from './consts';
 import { Mission, missionById, MISSIONS } from './missions';
+import { settings, graphicsProfile } from './settings';
 
 export const SIM_HZ = 30;
 const SIM_DT = 1 / SIM_HZ;
@@ -206,11 +207,29 @@ export class Game {
     const frame = (now: number) => {
       if (!this.running) return;
       this.rafId = requestAnimationFrame(frame);
-      const dt = Math.min(0.25, (now - this.lastFrame) / 1000);
+      // Frame pacing: skip this vsync if we are ahead of the rate the moment calls for.
+      // Skipped time is not lost — it is carried into the next frame's dt.
+      const elapsed = now - this.lastFrame;
+      if (elapsed < this.frameIntervalMs(now) - 1.5) return;
+      const dt = Math.min(0.25, elapsed / 1000);
       this.lastFrame = now;
       this.frame(dt, now / 1000);
     };
     this.rafId = requestAnimationFrame(frame);
+  }
+
+  /**
+   * How often to draw right now. Full rate only while a finger is on the glass or the
+   * camera is still easing, so panning stays smooth; a steadier rate while the city
+   * runs untouched; a trickle while paused or behind a menu, enough to keep the river
+   * moving. Most of a phone's heat in a game like this is redrawing an unchanged screen.
+   */
+  private frameIntervalMs(now: number): number {
+    const p = graphicsProfile(settings().graphics);
+    const active = this.input.touching || this.scene.camera.moving || now - this.input.lastInputTime < 600;
+    if (active) return 1000 / p.activeFps;
+    const running = !this.suspended && this.status === 'playing' && this.speedIndex > 0;
+    return 1000 / (running ? p.runningFps : p.idleFps);
   }
 
   stop(): void {
@@ -255,8 +274,20 @@ export class Game {
       floodLevel: this.city.floodLevel,
       population: this.city.population,
       season: this.city.season,
-      danger: clamp(this.city.walkers.live.filter((i) => this.city.walkers.get(i)?.kind === 'enemy').length / 12, 0, 1),
+      danger: this.dangerLevel(),
     });
+  }
+
+  /** Enemy pressure for the score, sampled twice a second rather than every frame. */
+  private dangerCache = 0;
+  private dangerTimer = 0;
+  private dangerLevel(): number {
+    if (++this.dangerTimer < 30) return this.dangerCache;
+    this.dangerTimer = 0;
+    let n = 0;
+    for (const id of this.city.walkers.live) if (this.city.walkers.get(id)?.kind === 'enemy') n++;
+    this.dangerCache = clamp(n / 12, 0, 1);
+    return this.dangerCache;
   }
 
   resize(cssW: number, cssH: number, dpr: number): void {

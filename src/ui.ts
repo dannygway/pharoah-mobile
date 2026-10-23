@@ -17,6 +17,7 @@ import { Game, SPEEDS, DEMOLISH, listSaves, readSave, deleteSave, loadUnlocked, 
 import { OVERLAYS, OverlayId, tileToWorld } from './scene';
 import { MISSIONS, SANDBOX, ALL_MISSIONS, Mission } from './missions';
 import { TICKS_PER_YEAR } from './consts';
+import { settings, updateSettings, GraphicsMode } from './settings';
 import { Terrain } from './world';
 
 // ---------------------------------------------------------------------------
@@ -251,14 +252,16 @@ export class UI {
   /** Called every frame from the game loop for the cheap, always-changing bits. */
   tick(dt: number): void {
     const c = this.game.city;
-    const dateEl = this.topBar.querySelector('.date-line');
-    if (dateEl) dateEl.textContent = `${MONTHS[c.month]} · Year ${c.year + 1} · ${SEASONS[c.season].name}`;
-    const floodEl = this.topBar.querySelector('.flood');
-    if (floodEl) floodEl.textContent = `💧 ${Math.round(c.floodLevel * 100)}%`;
-    const fundsEl = this.topBar.querySelector('.funds .v');
-    if (fundsEl) fundsEl.textContent = money(c.funds);
-    const popEl = this.topBar.querySelector('.pop .v');
-    if (popEl) popEl.textContent = String(c.population);
+    // Write only what changed. Every DOM write can cost iOS a style and layout pass, and
+    // this runs every frame.
+    const put = (sel: string, text: string) => {
+      const n = this.topBar.querySelector(sel);
+      if (n && n.textContent !== text) n.textContent = text;
+    };
+    put('.date-line', `${MONTHS[c.month]} · Year ${c.year + 1} · ${SEASONS[c.season].name}`);
+    put('.flood', `💧 ${Math.round(c.floodLevel * 100)}%`);
+    put('.funds .v', money(c.funds));
+    put('.pop .v', String(c.population));
 
     // The fault count drives the most accessible control on the screen, so it has to be
     // live — but it is a sweep over every building, so it runs on its own slow cadence.
@@ -275,6 +278,12 @@ export class UI {
           chip.classList.toggle('ok', n === 0);
         }
       }
+    }
+
+    this.liveTimer += dt;
+    if (this.liveTimer > 0.5) {
+      this.liveTimer = 0;
+      this.refreshLiveReadings();
     }
 
     this.minimapTimer += dt;
@@ -317,20 +326,16 @@ export class UI {
     // The status strip. Every reading is a number and a band together — a novice reads
     // the band, an expert reads the number — and each carries a direction, because a
     // city is a process and a single figure never says which way it is going.
-    const nileDir = c.floodLevel > this.lastFlood + 0.002 ? '▲'
-      : c.floodLevel < this.lastFlood - 0.002 ? '▼' : '▬';
-    const moodDir = c.sentiment > this.lastSentiment + 0.3 ? '▲'
-      : c.sentiment < this.lastSentiment - 0.3 ? '▼' : '▬';
     const probs = this.problemCount;
     const rowThree = el('div', { class: 'tb-row three' },
       el('button', {
         class: 'strip nile', 'aria-label': 'Nilometer',
         onclick: () => this.openNilometer(),
-      }, `💧 ${Math.round(c.floodLevel * 100)}% ${nileDir} ${this.nileBand()}`),
+      }, this.nileText()),
       el('button', {
         class: `strip mood ${c.sentiment < 40 ? 'bad' : ''}`, 'aria-label': 'City sentiment',
         onclick: () => this.openSheet('advisors'),
-      }, `${this.moodGlyph()} ${Math.round(c.sentiment)} ${moodDir} ${c.sentimentBand}`),
+      }, this.moodText()),
       el('button', {
         class: `strip probs ${probs ? 'bad' : 'ok'}`, 'aria-label': 'Problems overlay',
         onclick: () => {
@@ -365,9 +370,58 @@ export class UI {
         }, `${SPEEDS[Math.max(1, this.game.speedIndex)]}×`)));
 
     this.topBar.append(rowOne, rowThree, rowTwo);
-    this.lastFlood = c.floodLevel;
-    this.lastSentiment = c.sentiment;
   }
+
+  /**
+   * Readings with a direction. The arrow compares against where the value stood a
+   * month ago, so it shows the trend rather than flickering with every small step.
+   */
+  private nileText(): string {
+    const c = this.game.city;
+    const d = c.floodLevel - this.lastFlood;
+    const dir = d > 0.01 ? '▲' : d < -0.01 ? '▼' : '▬';
+    return `💧 ${Math.round(c.floodLevel * 100)}% ${dir} ${this.nileBand()}`;
+  }
+  private moodText(): string {
+    const c = this.game.city;
+    const d = c.sentiment - this.lastSentiment;
+    const dir = d > 1 ? '▲' : d < -1 ? '▼' : '▬';
+    return `${this.moodGlyph()} ${Math.round(c.sentiment)} ${dir} ${c.sentimentBand}`;
+  }
+
+  /**
+   * Keep the strip live. It used to be rebuilt only when something was tapped, so the
+   * mood, the Nile and the ratings sat frozen while the city changed under them.
+   */
+  private liveTimer = 0;
+  private trendMonth = -1;
+  private refreshLiveReadings(): void {
+    const c = this.game.city;
+    // Roll the trend baseline forward once a month.
+    if (c.month !== this.trendMonth) {
+      if (this.trendMonth >= 0) {
+        this.lastFlood = this.monthFlood;
+        this.lastSentiment = this.monthSentiment;
+      }
+      this.trendMonth = c.month;
+      this.monthFlood = c.floodLevel;
+      this.monthSentiment = c.sentiment;
+    }
+    const nile = this.topBar.querySelector('.strip.nile');
+    if (nile) nile.textContent = this.nileText();
+    const mood = this.topBar.querySelector('.strip.mood');
+    if (mood) {
+      mood.textContent = this.moodText();
+      mood.classList.toggle('bad', c.sentiment < 40);
+    }
+    const vals = [c.ratings.culture, c.ratings.prosperity, c.ratings.monument, c.ratings.kingdom];
+    this.topBar.querySelectorAll('.pill .pv').forEach((n, i) => {
+      const v = String(Math.round(vals[i] ?? 0));
+      if (n.textContent !== v) n.textContent = v;
+    });
+  }
+  private monthFlood = 0;
+  private monthSentiment = 60;
 
   /**
    * The Nilometer. A number alone does not tell a player whether to worry, and the
@@ -1586,6 +1640,27 @@ export class UI {
     }) as HTMLInputElement;
     musicSlider.addEventListener('input', () => a.setMusicVolume(Number(musicSlider.value) / 100));
 
+    // Graphics: what the phone spends on drawing.
+    const gfx = el('div', { class: 'chip-grid' });
+    const gfxNote = el('p', { class: 'hint' }, '');
+    const GFX: [GraphicsMode, string, string][] = [
+      ['battery', 'Battery saver', 'Lower resolution and frame rate. Cooler phone, longer sessions.'],
+      ['balanced', 'Balanced', 'Smooth while you touch, steady while you watch. Recommended.'],
+      ['sharp', 'Sharpest', 'Full screen resolution and 120 Hz throughout. Runs warmer.'],
+    ];
+    const drawGfx = () => {
+      clear(gfx);
+      for (const [mode, label, note] of GFX) {
+        const on = settings().graphics === mode;
+        if (on) gfxNote.textContent = note;
+        gfx.appendChild(el('button', {
+          class: `chip ${on ? 'on' : ''}`,
+          onclick: () => { updateSettings({ graphics: mode }); drawGfx(); },
+        }, label));
+      }
+    };
+    drawGfx();
+
     const perf = el('div', { class: 'perf' });
     const updatePerf = () => {
       perf.textContent = `${this.game.scene.fps.toFixed(0)} fps · ${this.game.renderer.lastSpriteCount} sprites · ${this.game.city.walkers.count} walkers`;
@@ -1597,7 +1672,9 @@ export class UI {
     body.append(
       soundBtn,
       el('div', { class: 'row' }, el('span', { class: 'k' }, 'Music'), musicSlider),
-      el('h4', {}, 'Performance'),
+      el('h4', {}, 'Graphics'),
+      gfx,
+      gfxNote,
       perf,
       el('button', {
         class: 'wide', onclick: () => {

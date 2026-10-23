@@ -596,8 +596,9 @@ export class City {
     }
     if (++this.monthAccumulator >= TICKS_PER_MONTH) {
       this.monthAccumulator = 0;
-      this.stepMonth();
+      this.monthPhase = 0;
     }
+    if (this.monthPhase >= 0) this.stepMonthPhase();
     this.stepFlood();
   }
 
@@ -847,17 +848,33 @@ export class City {
   // Monthly pass
   // -------------------------------------------------------------------------
 
-  private stepMonth(): void {
-    this.allocateLabor();
-    this.consumeHousehold();
-    this.evolveHousing();
-    this.collectTaxes();
-    this.payWages();
-    this.updateImmigration();
-    this.updateHealth();
-    this.updateStats();
-    this.updateSentiment();
-    this.checkLogistics();
+  /**
+   * The monthly pass, spread over the first six ticks of the month.
+   *
+   * Every part is cheap, but run together on one tick they made one long frame — in a
+   * big city about ten milliseconds, which at speed and 120 Hz is a visible hitch every
+   * couple of seconds. Same work, same order, no single heavy frame.
+   */
+  private monthPhase = -1;
+  private stepMonthPhase(): void {
+    switch (this.monthPhase++) {
+      case 0: this.allocateLabor(); this.consumeHousehold(); break;
+      case 1: this.evolveHousing(); break;
+      case 2: this.collectTaxes(); this.payWages(); break;
+      case 3: this.updateImmigration(); break;
+      case 4: this.updateHealth(); break;
+      default:
+        this.updateStats();
+        this.updateSentiment();
+        this.checkLogistics();
+        this.monthPhase = -1;
+    }
+  }
+
+  /** The whole monthly pass at once, for tests and tools that want it synchronously. */
+  stepMonth(): void {
+    this.monthPhase = 0;
+    while (this.monthPhase >= 0) this.stepMonthPhase();
   }
 
   /**

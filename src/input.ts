@@ -60,6 +60,12 @@ export class Input {
   /** Viewport size in CSS pixels; kept in sync by the game loop. */
   viewW = 1;
   viewH = 1;
+  /** When the player last touched the world, for frame pacing. */
+  lastInputTime = 0;
+  /** Is a finger on the glass right now? */
+  get touching(): boolean {
+    return this.pts.size > 0;
+  }
 
   constructor(el: HTMLElement, cam: Camera, handlers: InputHandlers) {
     this.el = el;
@@ -92,6 +98,7 @@ export class Input {
 
   private onDown = (e: PointerEvent): void => {
     e.preventDefault();
+    this.lastInputTime = performance.now();
     this.el.setPointerCapture?.(e.pointerId);
     const [x, y] = this.local(e);
     const now = performance.now();
@@ -137,6 +144,7 @@ export class Input {
     const p = this.pts.get(e.pointerId);
     if (!p) return;
     e.preventDefault();
+    this.lastInputTime = performance.now();
     const [x, y] = this.local(e);
     const prevX = p.x;
     const prevY = p.y;
@@ -228,6 +236,7 @@ export class Input {
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
+    this.lastInputTime = performance.now();
     const rect = this.el.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;

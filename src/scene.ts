@@ -56,6 +56,12 @@ export class Camera {
 
   worldSize = 100;
 
+  /** Still easing toward its target, or carrying a fling? */
+  get moving(): boolean {
+    return Math.abs(this.tx - this.x) > 0.3 || Math.abs(this.ty - this.y) > 0.3 ||
+      Math.abs(this.tzoom - this.zoom) > 0.0015 || this.vx !== 0 || this.vy !== 0;
+  }
+
   centreOnTile(tx: number, ty: number): void {
     this.x = this.tx = (tx - ty) * (TILE_W / 2);
     this.y = this.ty = (tx + ty) * (TILE_H / 2);

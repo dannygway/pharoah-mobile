@@ -13,7 +13,8 @@
     "smoke": "npm run build && node scripts/smoke.mjs",
     "standalone": "npm run build && node scripts/standalone.mjs",
     "soak": "npm run build && node scripts/soak.mjs",
-    "test:housing": "npm run build && node scripts/housing.mjs"
+    "test:housing": "npm run build && node scripts/housing.mjs",
+    "bench": "npm run build && node scripts/bench.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

@@ -9,8 +9,8 @@
  * filenames produced by the build.
  */
 
-const VERSION = 'kemet-5b-mvksjm58';
-const PRECACHE = ["./","./index.html","./assets/index-BB5MnrcA.css","./assets/index-BCyZ1gfP.js","./icons/apple-touch-icon.png","./icons/icon-192.png","./icons/icon-512.png","./icons/icon-maskable-512.png","./manifest.webmanifest"] || ['./', './index.html'];
+const VERSION = 'kemet-5b-mvku233l';
+const PRECACHE = ["./","./index.html","./assets/index-BB5MnrcA.css","./assets/index-VKFmCXf1.js","./icons/apple-touch-icon.png","./icons/icon-192.png","./icons/icon-512.png","./icons/icon-maskable-512.png","./manifest.webmanifest"] || ['./', './index.html'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

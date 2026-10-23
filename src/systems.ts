@@ -47,6 +47,7 @@ export class Systems {
   private monumentTimer = 0;
   private monthTimer = 0;
   private lastMonth = -1;
+  private monthDelay = 0;
   private lastYear = -1;
 
   /** Festival being prepared, if any. */
@@ -74,11 +75,15 @@ export class Systems {
       this.runGetOrders();
     }
 
+    // The pantheon, ratings and disasters run a few ticks into the month, after the
+    // city's own monthly pass (which is itself spread over six ticks), so none of them
+    // share a frame.
     const m = city.month;
     if (m !== this.lastMonth) {
       this.lastMonth = m;
-      this.runMonth();
+      this.monthDelay = 8;
     }
+    if (this.monthDelay > 0 && --this.monthDelay === 0) this.runMonth();
     const y = city.year;
     if (y !== this.lastYear) {
       this.lastYear = y;

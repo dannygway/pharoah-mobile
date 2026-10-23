@@ -11,6 +11,7 @@ import { Game, readSave, loadUnlocked } from './game';
 import { UI } from './ui';
 import { AudioEngine } from './audio';
 import { MISSIONS } from './missions';
+import { settings, graphicsProfile, onSettingsChange } from './settings';
 import './styles.css';
 
 const boot = document.getElementById('boot')!;
@@ -53,14 +54,17 @@ async function main(): Promise<void> {
       const vv = window.visualViewport;
       const w = Math.round(vv?.width ?? window.innerWidth);
       const h = Math.round(vv?.height ?? window.innerHeight);
-      // Cap the backing store: above 3x there is no visible gain and real thermal cost.
-      const dpr = Math.min(window.devicePixelRatio || 1, 3);
+      // Cap the backing store by the graphics setting. The art is painted at 2×, so
+      // the default stops there; going to the screen's native 3× is 2.25× the GPU work
+      // for detail the sprites do not have.
+      const dpr = Math.min(window.devicePixelRatio || 1, graphicsProfile(settings().graphics).maxDpr);
       canvas.style.width = `${w}px`;
       canvas.style.height = `${h}px`;
       game.resize(w, h, dpr);
       document.documentElement.style.setProperty('--vh', `${h}px`);
     };
     applySize();
+    onSettingsChange(() => applySize());
     window.addEventListener('resize', applySize);
     window.visualViewport?.addEventListener('resize', applySize);
     window.addEventListener('orientationchange', () => setTimeout(applySize, 120));
