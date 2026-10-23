@@ -14,7 +14,8 @@
     "standalone": "npm run build && node scripts/standalone.mjs",
     "soak": "npm run build && node scripts/soak.mjs",
     "test:housing": "npm run build && node scripts/housing.mjs",
-    "bench": "npm run build && node scripts/bench.mjs"
+    "bench": "npm run build && node scripts/bench.mjs",
+    "test:audio": "npm run build && node scripts/audio.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

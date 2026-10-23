@@ -11,7 +11,7 @@ import { Game, readSave, loadUnlocked } from './game';
 import { UI } from './ui';
 import { AudioEngine } from './audio';
 import { MISSIONS } from './missions';
-import { settings, graphicsProfile, onSettingsChange } from './settings';
+import { settings, graphicsProfile, onSettingsChange, updateSettings } from './settings';
 import './styles.css';
 
 const boot = document.getElementById('boot')!;
@@ -38,6 +38,12 @@ async function main(): Promise<void> {
     await nextFrame();
 
     const audio = new AudioEngine();
+    const applyMix = () => {
+      const s = settings();
+      audio.setMix(s.music, s.effects, s.ambience, s.muted);
+    };
+    applyMix();
+    onSettingsChange(applyMix);
 
     let game = new Game(canvas, atlas, audio, MISSIONS[0].id);
     setBoot(0.9, 'Laying out the city…');
@@ -123,7 +129,7 @@ async function main(): Promise<void> {
     // ---------------------------------------------------------------------
 
     const unlock = () => {
-      audio.unlock();
+      audio.unlock().then(applyMix);
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('touchstart', unlock);
     };
@@ -151,7 +157,7 @@ async function main(): Promise<void> {
     ui.openStart(auto && (auto.city?.tick ?? 0) > 600 ? auto : null);
 
     // Expose a handle for debugging from Safari's inspector.
-    (window as any).kemet = { get game() { return game; }, ui, atlas };
+    (window as any).kemet = { get game() { return game; }, ui, atlas, updateSettings };
   } catch (err: any) {
     console.error(err);
     bootMsg.textContent = `Could not start: ${err?.message ?? err}`;

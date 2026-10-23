@@ -9,7 +9,7 @@
 
 import { clamp, money } from './core';
 import { World, Terrain } from './world';
-import { City, Building, TradeRoute } from './sim';
+import { City, Building, TradeRoute, CityEvent } from './sim';
 import { Systems } from './systems';
 import { Scene, OverlayId, worldToTile, tileToWorld } from './scene';
 import { Renderer } from './gl';
@@ -20,6 +20,7 @@ import { BUILDING_BY_ID, BuildingDef, GoodId, GOD_IDS, GOOD_RENAMES, BUILDING_RE
 import { TICKS_PER_MONTH, TICKS_PER_YEAR } from './consts';
 import { Mission, missionById, MISSIONS } from './missions';
 import { settings, graphicsProfile } from './settings';
+import { haptic } from './haptics';
 
 export const SIM_HZ = 30;
 const SIM_DT = 1 / SIM_HZ;
@@ -86,6 +87,8 @@ export class Game {
 
   /** Called whenever something happened the UI should redraw for. */
   onChange: (() => void) | null = null;
+  /** Every city event, after its sound has played: the UI turns some into floating text. */
+  onCityEvent: ((e: CityEvent) => void) | null = null;
   onStatusChange: ((s: GameStatus) => void) | null = null;
 
   private accumulator = 0;
@@ -270,12 +273,147 @@ export class Game {
 
     this.scene.render(this.city, this.systems, time, dt);
 
+    this.updateAudio(dt);
+  }
+
+  // -------------------------------------------------------------------------
+  // Sound: what the camera hears, and what just happened
+  // -------------------------------------------------------------------------
+
+  private listenTimer = 0;
+  private recentFire = 0;
+  private lastEventSound: Record<string, number> = {};
+
+  private updateAudio(dt: number): void {
+    const city = this.city;
     this.audio.update({
-      floodLevel: this.city.floodLevel,
-      population: this.city.population,
-      season: this.city.season,
+      floodLevel: city.floodLevel,
+      population: city.population,
+      season: city.season,
       danger: this.dangerLevel(),
+      sentiment: city.sentiment,
     });
+    this.drainEvents();
+    this.recentFire = Math.max(0, this.recentFire - dt * 0.25);
+    this.listenTimer -= dt;
+    if (this.listenTimer > 0) return;
+    this.listenTimer = 0.25;
+    this.audio.setListener(this.computeListener());
+  }
+
+  /** Sample the land, streets and buildings around the middle of the screen. */
+  private computeListener() {
+    const cam = this.scene.camera;
+    const w = this.world;
+    const city = this.city;
+    const [fx, fy] = worldToTile(cam.x, cam.y);
+    const cx = Math.round(fx), cy = Math.round(fy);
+    // Roughly how many tiles the screen spans from its centre.
+    const reach = clamp(Math.round(this.renderer.viewW / cam.zoom / TILE_W), 4, 40);
+    const step = Math.max(1, Math.floor(reach / 5));
+    let water = 0, green = 0, desert = 0, n = 0;
+    for (let dy = -reach; dy <= reach; dy += step) {
+      for (let dx = -reach; dx <= reach; dx += step) {
+        const x = cx + dx, y = cy + dy;
+        if (!w.inBounds(x, y)) { desert += 0.3; n++; continue; }
+        const t = w.terrain[w.idx(x, y)];
+        if (t === Terrain.Water) water++;
+        else if (t === Terrain.Floodplain || t === Terrain.Marsh || t === Terrain.Grass) green++;
+        else desert++;
+        n++;
+      }
+    }
+    let walkers = 0;
+    for (const id of city.walkers.live) {
+      const wk = city.walkers.get(id);
+      if (!wk) continue;
+      if (Math.abs(w.xOf(wk.tile) - cx) <= reach && Math.abs(w.yOf(wk.tile) - cy) <= reach) walkers++;
+    }
+    // The working building nearest the centre, when the player is close enough to hear it.
+    let focus: string | null = null, focusGain = 0, fire = this.recentFire;
+    const near = Math.min(reach, 8);
+    let bestD = Infinity;
+    for (let dy = -near; dy <= near; dy++) {
+      for (let dx = -near; dx <= near; dx++) {
+        const x = cx + dx, y = cy + dy;
+        if (!w.inBounds(x, y)) continue;
+        const id = w.building[w.idx(x, y)];
+        if (id < 0) continue;
+        const b = city.buildings[id];
+        if (!b || !b.built) continue;
+        if (b.fire > 88) fire = Math.max(fire, 0.4);
+        if (b.house || b.defId === 'road' || b.defId === 'plaza') continue;
+        const d = Math.hypot(dx, dy);
+        if (d < bestD && (b.staffing > 0 || b.defId.startsWith('mon_'))) { bestD = d; focus = b.defId; focusGain = clamp(b.staffing, 0.4, 1); }
+      }
+    }
+    if (cam.zoom < 0.7 || bestD > 5) focus = null;
+    else focusGain *= clamp(1 - bestD / 6, 0.2, 1);
+    const area = (reach * 2 + 1) ** 2;
+    return {
+      water: n ? water / n : 0, green: n ? green / n : 0, desert: n ? desert / n : 0,
+      crowd: clamp(walkers / Math.max(12, area * 0.04), 0, 1),
+      zoom: cam.zoom, focus, focusGain, fire: clamp(fire, 0, 1),
+    };
+  }
+
+  /** Where on screen a tile is, as a stereo position and a loudness. */
+  private placeSound(tile: number): { gain: number; pan: number } {
+    if (tile < 0) return { gain: 1, pan: 0 };
+    const cam = this.scene.camera;
+    const [wx, wy] = tileToWorld(this.world.xOf(tile), this.world.yOf(tile));
+    const vw = this.renderer.viewW, vh = this.renderer.viewH;
+    const [sx, sy] = cam.worldToScreen(wx, wy + TILE_H / 2, vw, vh);
+    const ox = Math.max(0, Math.abs(sx - vw / 2) - vw / 2) / vw;
+    const oy = Math.max(0, Math.abs(sy - vh / 2) - vh / 2) / vh;
+    const off = Math.hypot(ox, oy);
+    return { gain: clamp(1 - off * 1.6, 0, 1) * clamp(0.5 + cam.zoom * 0.5, 0.5, 1), pan: clamp((sx - vw / 2) / vw, -0.8, 0.8) };
+  }
+
+  /** Each kind of event may sound at most this often, so a busy month is not a cacophony. */
+  private allowSound(kind: string, gapMs: number): boolean {
+    const now = performance.now();
+    if (now - (this.lastEventSound[kind] ?? -1e9) < gapMs) return false;
+    this.lastEventSound[kind] = now;
+    return true;
+  }
+
+  private drainEvents(): void {
+    const evs = this.city.events;
+    if (!evs.length) return;
+    const a = this.audio;
+    for (const e of evs) {
+      const at = this.placeSound(e.tile);
+      switch (e.kind) {
+        case 'evolve':
+          if (at.gain > 0.05 && this.allowSound('evolve', 350)) a.evolve(e.value, at.gain, at.pan);
+          break;
+        case 'devolve':
+          if (at.gain > 0.05 && this.allowSound('devolve', 600)) a.devolve(at.gain, at.pan);
+          break;
+        case 'grow':
+          if (at.gain > 0.05 && this.allowSound('grow', 500)) a.grow(at.gain, at.pan);
+          break;
+        case 'tax':
+          if (this.allowSound('tax', 2000)) a.coins(e.value, 0.8);
+          break;
+        case 'fire':
+          this.recentFire = Math.max(this.recentFire, at.gain);
+          if (this.allowSound('fire', 3000)) a.fireAlarm();
+          break;
+        case 'collapse':
+          if (this.allowSound('collapse', 1500)) a.collapse();
+          break;
+        case 'stage': if (this.allowSound('fanfare', 1500)) a.fanfare(false); break;
+        case 'monument': a.fanfare(true); break;
+        case 'blessing': a.blessing(); break;
+        case 'wrath': a.thunder(); break;
+        case 'invasion': if (this.allowSound('horn', 5000)) a.horn(); break;
+        case 'raid': if (this.allowSound('horn', 8000)) a.horn(); break;
+      }
+      this.onCityEvent?.(e);
+    }
+    evs.length = 0;
   }
 
   /** Enemy pressure for the score, sampled twice a second rather than every frame. */
@@ -524,13 +662,17 @@ export class Game {
     }
 
     if (done.length) {
-      armed === DEMOLISH ? this.audio.demolish() : this.audio.build();
+      if (armed === DEMOLISH) this.audio.demolish();
+      else if (armed === 'road' || armed === 'plaza') this.audio.road();
+      else this.audio.build();
+      haptic(armed === DEMOLISH ? 'medium' : 'light');
       this.lastAction = { kind: armed === DEMOLISH ? 'demolish' : 'place', tiles: done };
       const what = done.length > 1 ? `${done.length} structures`
         : (BUILDING_BY_ID[done[0].defId]?.name ?? 'structure').toLowerCase();
       this.onUndoAvailable?.(armed === DEMOLISH ? `Demolished ${what}` : `Placed ${what}`);
     } else if (this.scene.cursorTile >= 0 || this.dragTiles.length) {
       this.audio.error();
+      haptic('error');
     }
 
     this.dragTiles = [];

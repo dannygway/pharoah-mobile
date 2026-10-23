@@ -597,6 +597,7 @@ export class Systems {
         if (st.stage >= stages.length) {
           this.completeMonument(site);
         } else {
+          city.emit('stage', city.world.idx(site.x, site.y), st.stage);
           city.pushMessage(
             `${def.name}: stage complete`,
             `Your workers have finished "${stage.name}". Next: ${stages[st.stage].name}.`,
@@ -613,6 +614,7 @@ export class Systems {
     const def = city.def(site);
     site.monument!.complete = true;
     site.built = 1;
+    city.emit('monument', city.world.idx(site.x, site.y));
     city.ratings.monument = clamp(city.ratings.monument + def.monument!.points, 0, 100);
     city.ratings.kingdom = clamp(city.ratings.kingdom + 4, 0, 100);
     for (const g of GOD_IDS) city.godMood[g] = clamp(city.godMood[g] + 8, -100, 100);
@@ -794,6 +796,7 @@ export class Systems {
         }
         break;
     }
+    city.emit('blessing', -1, GOD_IDS.indexOf(g));
     city.pushMessage(`${god.name} smiles upon you`, god.blessing, 'good');
   }
 
@@ -862,6 +865,7 @@ export class Systems {
         }
         break;
     }
+    city.emit('wrath', -1, GOD_IDS.indexOf(g));
     city.pushMessage(`${god.name} is angered`, god.wrath, 'bad');
   }
 
@@ -971,10 +975,12 @@ export class Systems {
       if (!b || !b.built) continue;
 
       if (b.fire >= 100 && city.rng.chance(0.18)) {
+        city.emit('fire', city.world.idx(b.x, b.y));
         this.burn(b);
         continue;
       }
       if (b.damage >= 100 && city.rng.chance(0.14)) {
+        city.emit('collapse', city.world.idx(b.x, b.y));
         city.pushMessage(
           'A building has collapsed',
           `Neglected walls have given way. An architect's post nearby would have prevented this.`,
@@ -1236,6 +1242,7 @@ export class Systems {
       const y = clamp(w.yOf(inv.entryTile) + oy, 1, w.size - 2);
       city.walkers.spawnEnemy(w.idx(x, y), inv.strength);
     }
+    city.emit('invasion', inv.entryTile);
     city.pushMessage(
       'We are invaded!',
       `${inv.enemy} have crossed your border in force. Send your companies to meet them or they will burn everything you have built.`,

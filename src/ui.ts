@@ -18,6 +18,7 @@ import { OVERLAYS, OverlayId, tileToWorld } from './scene';
 import { MISSIONS, SANDBOX, ALL_MISSIONS, Mission } from './missions';
 import { TICKS_PER_YEAR } from './consts';
 import { settings, updateSettings, GraphicsMode } from './settings';
+import { haptic } from './haptics';
 import { Terrain } from './world';
 
 // ---------------------------------------------------------------------------
@@ -764,6 +765,7 @@ export class UI {
     this.sheetTitle.textContent = title;
     clear(this.sheetBody);
     this.sheetBody.appendChild(body);
+    if (this.sheet.classList.contains('hidden')) this.game.audio.panel();
     this.sheet.classList.remove('hidden');
     this.sheetView = 'custom';
   }
@@ -777,6 +779,7 @@ export class UI {
 
   private openSheet(view: string): void {
     this.sheetView = view;
+    if (this.sheet.classList.contains('hidden')) this.game.audio.panel();
     this.sheet.classList.remove('hidden');
     switch (view) {
       case 'overlays': this.renderOverlays(); break;
@@ -793,6 +796,7 @@ export class UI {
     }
     this.activeCategory = cat;
     this.sheetView = 'build';
+    if (this.sheet.classList.contains('hidden')) this.game.audio.panel();
     this.sheet.classList.remove('hidden');
     this.renderBuildList(cat);
     this.refresh();
@@ -1629,16 +1633,22 @@ export class UI {
     const body = el('div', { class: 'menu' });
     body.append(el('h2', {}, 'Settings'));
 
-    const soundBtn = el('button', { class: 'wide' }, a.enabled ? 'Sound: on' : 'Sound: off');
-    soundBtn.addEventListener('click', () => {
-      a.setEnabled(!a.enabled);
-      soundBtn.textContent = a.enabled ? 'Sound: on' : 'Sound: off';
-    });
-
-    const musicSlider = el('input', {
-      type: 'range', min: '0', max: '100', value: String(Math.round(a.musicVolume * 100)),
-    }) as HTMLInputElement;
-    musicSlider.addEventListener('input', () => a.setMusicVolume(Number(musicSlider.value) / 100));
+    // Sound: three levels and a mute, saved with the other settings.
+    const slider = (label: string, key: 'music' | 'effects' | 'ambience') => {
+      const input = el('input', {
+        type: 'range', min: '0', max: '100', value: String(Math.round(settings()[key] * 100)),
+      }) as HTMLInputElement;
+      input.addEventListener('input', () => updateSettings({ [key]: Number(input.value) / 100 }));
+      input.addEventListener('change', () => { if (key === 'effects') a.tap(); });
+      return el('div', { class: 'row' }, el('span', { class: 'k' }, label), input);
+    };
+    const toggle = (label: (on: boolean) => string, get: () => boolean, set: (on: boolean) => void) => {
+      const b = el('button', { class: 'wide' }, label(get()));
+      b.addEventListener('click', () => { set(!get()); b.textContent = label(get()); a.tap(); haptic('light'); });
+      return b;
+    };
+    const muteBtn = toggle((on) => on ? 'Sound: off' : 'Sound: on', () => settings().muted, (on) => updateSettings({ muted: on }));
+    const hapticBtn = toggle((on) => on ? 'Haptics: on' : 'Haptics: off', () => settings().haptics, (on) => updateSettings({ haptics: on }));
 
     // Graphics: what the phone spends on drawing.
     const gfx = el('div', { class: 'chip-grid' });
@@ -1670,8 +1680,12 @@ export class UI {
     (body as any).__iv = iv;
 
     body.append(
-      soundBtn,
-      el('div', { class: 'row' }, el('span', { class: 'k' }, 'Music'), musicSlider),
+      el('h4', {}, 'Sound'),
+      muteBtn,
+      slider('Music', 'music'),
+      slider('Effects', 'effects'),
+      slider('Ambience', 'ambience'),
+      hapticBtn,
       el('h4', {}, 'Graphics'),
       gfx,
       gfxNote,
@@ -1741,6 +1755,7 @@ export class UI {
     this.game.suspended = true;
     clear(this.modal);
     const sheet = el('div', { class: 'modal-sheet' }, body);
+    if (this.modal.classList.contains('hidden')) this.game.audio.panel();
     this.modal.appendChild(sheet);
     this.modal.classList.remove('hidden');
   }

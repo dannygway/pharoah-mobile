@@ -960,6 +960,7 @@ export class WalkerSystem {
         if (!b) continue;
         b.damage = Math.min(140, b.damage + 18);
         if (b.damage >= 130) {
+          city.emit('raid', w.tile);
           city.pushMessage('Buildings destroyed', `Raiders have levelled part of your city.`, 'bad', w.tile);
           city.demolish(b.x, b.y);
           return;

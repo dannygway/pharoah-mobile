@@ -17,6 +17,11 @@ import { Walker, WalkerSystem } from './walkers';
 
 export { TICKS_PER_MONTH, TICKS_PER_YEAR, SERVICE_DURATION } from './consts';
 
+export type CityEventKind =
+  | 'evolve' | 'devolve' | 'grow' | 'tax' | 'fire' | 'collapse' | 'stage' | 'monument'
+  | 'blessing' | 'wrath' | 'invasion' | 'raid';
+export interface CityEvent { kind: CityEventKind; tile: number; value: number }
+
 export interface HouseState {
   level: number;
   people: number;
@@ -223,6 +228,16 @@ export class City {
   nextFloodQuality = 0.6;
 
   messages: CityMessage[] = [];
+
+  /**
+   * Things that just happened, for the presentation layer: sound, floating text,
+   * sparkles. The simulation only appends; the game drains it every frame. Nothing in
+   * the simulation ever reads it, so it cannot affect a result.
+   */
+  events: CityEvent[] = [];
+  emit(kind: CityEventKind, tile = -1, value = 0): void {
+    if (this.events.length < 256) this.events.push({ kind, tile, value });
+  }
   private nextMessageId = 1;
 
   trade: TradeRoute[] = [];
@@ -1189,6 +1204,7 @@ export class City {
       const cur = HOUSING[h.level];
       const curFail = this.housingFailure(b, h, cur, des);
       if (curFail) {
+        if (h.level > 1) this.emit('devolve', this.world.idx(b.x, b.y), h.level - 1);
         h.level = Math.max(1, h.level - 1);
         h.blocker = curFail;
         const cap = this.houseCapacity(b);
@@ -1220,6 +1236,7 @@ export class City {
         for (let m = need; m <= 4 && !grew; m++) grew = this.tryGrowHouse(b, m);
         if (grew) {
           h.blocker = 'Expanding';
+          this.emit('grow', this.world.idx(b.x, b.y), b.size);
         } else {
           h.blocker = `No room to expand: a ${next.name.toLowerCase()} needs a ${need}×${need} plot, ` +
             `and the land around this house is not all housing. Roads, gardens and other buildings block it.`;
@@ -1227,6 +1244,7 @@ export class City {
         continue;
       }
       h.level++;
+      this.emit('evolve', this.world.idx(b.x, b.y), h.level);
       h.blocker = '';
     }
   }
@@ -1300,6 +1318,7 @@ export class City {
     }
     income = Math.round(income);
     this.funds += income;
+    if (income > 0) this.emit('tax', -1, income);
     this.stats.monthlyIncome = income;
     this.savings += Math.round(this.salary / 12);
   }
