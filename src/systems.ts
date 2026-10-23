@@ -62,6 +62,7 @@ export class Systems {
     if (++this.logisticsTimer >= 90) {
       this.logisticsTimer = 0;
       this.runLogistics();
+      this.runWorkCamps();
     }
     if (++this.monumentTimer >= 45) {
       this.monumentTimer = 0;
@@ -152,7 +153,7 @@ export class Systems {
         add(70, `${def.name} has no road`, 'Nothing can reach it and it does nothing. Connect it.', tile, id);
         continue;
       }
-      if (def.workers > 0 && b.staffing <= 0 && b.enabled) {
+      if (city.workersFor(b) > 0 && b.staffing <= 0 && b.enabled) {
         add(62, `${def.name} has no workers`,
           'Its whole sector is being outbid. Raise it in the labour advisor or house more people.', tile, id);
         continue;
@@ -168,11 +169,25 @@ export class Systems {
           `No performer. Build a ${school.toLowerCase()} within reach of it.`, tile, id);
         continue;
       }
+      if (b.campFarm && !(b.tended ?? 0)) {
+        const centre = city.world.idx(b.x + (b.size >> 1), b.y + (b.size >> 1));
+        if (!city.world.flooded[centre]) {
+          const camps = city.countOf('work_camp');
+          add(66, `${def.name} lies fallow`, camps
+            ? 'No peasants are reaching it. A work camp only sends them to farms within reach along its roads — build one closer, or give it more workers.'
+            : 'Floodplain farms are worked by peasants from a work camp, and you have none. Build one near the fields.', tile, id);
+          continue;
+        }
+      }
       if (def.produces) {
-        const have = b.store[def.produces] ?? 0;
-        if (have >= (def.produceQty ?? 8) * 2) {
-          add(60, `${def.name} cannot deliver`,
-            `It is full of ${GOODS[def.produces].name.toLowerCase()} and no store will take it.`, tile, id);
+        const outputs: [GoodId, number][] = [[def.produces, def.produceQty ?? 8]];
+        for (const [g, q] of Object.entries(def.alsoProduces ?? {})) outputs.push([g as GoodId, q as number]);
+        const stuck = outputs.find(([g, q]) => (b.store[g] ?? 0) >= q * 2);
+        if (stuck) {
+          const name = GOODS[stuck[0]].name.toLowerCase();
+          const store = GOODS[stuck[0]].kind === 'food' ? 'granary' : 'storage yard';
+          add(60, `${def.name} cannot deliver its ${name}`,
+            `It is piling up at the ${def.cat === 'food' ? 'farm' : 'workshop'}. No ${store} will take it — build one, or set an existing one to accept ${name}.`, tile, id);
           continue;
         }
       }
@@ -268,6 +283,48 @@ export class Systems {
         if (qty < need) continue;
         if (city.walkers.spawnSupply(src, b, g, qty)) break;
       }
+    }
+  }
+
+  /**
+   * Floodplain farms that need peasants and that this camp could send them to: dry
+   * (nothing to plant under water), low on banked labour, within a day's walk, and not
+   * already being walked to. Nearest first.
+   */
+  farmWorkFor(camp: Building): Building[] {
+    const city = this.city;
+    const out: { b: Building; d: number }[] = [];
+    for (const id of city.liveBuildings) {
+      const b = city.buildings[id];
+      if (!b?.campFarm || !b.built || !b.hasRoad || !b.enabled) continue;
+      const centre = city.world.idx(b.x + (b.size >> 1), b.y + (b.size >> 1));
+      if (city.world.flooded[centre]) continue;
+      if ((b.tended ?? 0) > TICKS_PER_MONTH * 1.5) continue;
+      const d = Math.abs(b.x - camp.x) + Math.abs(b.y - camp.y);
+      if (d > 45) continue;
+      out.push({ b, d });
+    }
+    return out.sort((a, b) => a.d - b.d).map((e) => e.b);
+  }
+
+  /** Work camps send peasants out to the floodplain farms. */
+  private runWorkCamps(): void {
+    const city = this.city;
+    // Farms that already have someone on the way do not need a second walker yet.
+    const enRoute = new Set<number>();
+    for (const wid of city.walkers.live) {
+      const w = city.walkers.get(wid);
+      if (w?.kind === 'laborer' && w.target >= 0) enRoute.add(w.target);
+    }
+    for (const id of city.liveBuildings) {
+      const camp = city.buildings[id];
+      if (!camp || camp.defId !== 'work_camp' || !camp.built || !camp.hasRoad) continue;
+      if (camp.staffing <= 0 || camp.walkers.length >= 4) continue;
+      // A half-staffed camp sends half as many.
+      if (!city.rng.chance(clamp(camp.staffing, 0.2, 1))) continue;
+      const farm = this.farmWorkFor(camp).find((f) => !enRoute.has(f.id));
+      if (!farm) continue;
+      if (city.walkers.spawnLaborer(camp, farm)) enRoute.add(farm.id);
     }
   }
 
@@ -504,6 +561,9 @@ export class Systems {
           const camp = city.buildings[id];
           if (!camp || camp.defId !== 'work_camp' || !camp.hasRoad || camp.staffing <= 0) continue;
           if (camp.walkers.length >= 3) continue;
+          // The fields come first. While there is planting or harvest to do the camp's
+          // peasants are on the farms; it is the flood that frees them for the monument.
+          if (this.farmWorkFor(camp).length) continue;
           city.walkers.spawnLaborer(camp, site);
         }
       }

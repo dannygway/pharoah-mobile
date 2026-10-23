@@ -339,6 +339,7 @@ export class World {
     let dry = 0;
     let rock = 0;
     let marsh = 0;
+    let meadow = 0;
     let adjacentWater = false;
     for (let dy = 0; dy < size; dy++) {
       for (let dx = 0; dx < size; dx++) {
@@ -346,6 +347,7 @@ export class World {
         const t = this.terrain[i];
         if (t === Terrain.Floodplain) floodplain++;
         if (t === Terrain.Desert || t === Terrain.Dune || t === Terrain.Grass) dry++;
+        if (t === Terrain.Grass) meadow++;
         if (t === Terrain.Rock) rock++;
         if (t === Terrain.Marsh) marsh++;
         if (this.nearWater[i]) adjacentWater = true;
@@ -354,6 +356,8 @@ export class World {
     const total = size * size;
     switch (req) {
       case 'floodplain': return floodplain >= total * 0.8;
+      // Black land or meadow. Which one decides who works it: see City.isCampFarm.
+      case 'farmland': return floodplain + meadow >= total * 0.8;
       case 'dry': return dry >= total * 0.6;
       case 'rock': return rock >= 1;
       case 'marsh': return marsh >= 1;

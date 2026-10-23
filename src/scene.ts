@@ -347,7 +347,7 @@ export class Scene {
       tR *= 0.6;
       tG *= 0.6;
       tB *= 0.62;
-    } else if (def.workers > 0 && b.staffing < 0.34) {
+    } else if (b.campFarm ? !(b.tended ?? 0) : def.workers > 0 && b.staffing < 0.34) {
       tR *= 0.82;
       tG *= 0.82;
       tB *= 0.86;
@@ -573,7 +573,7 @@ export class Scene {
         return b.damage > 4 ? heat(1 - b.damage / 110) : null;
       case 'workers': {
         const def = BUILDING_BY_ID[b.defId];
-        if (!def.workers) return null;
+        if (!city.workersFor(b)) return null;
         return heat(b.staffing);
       }
       default:

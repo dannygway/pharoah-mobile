@@ -91,6 +91,10 @@ export interface Building {
   orders?: Partial<Record<GoodId, 'accept' | 'refuse' | 'get' | 'empty'>>;
   /** Entertainment venues hold a performer sent from their school; 0 means idle. */
   performers?: number;
+  /** Floodplain farm: worked by work-camp peasants rather than by the city's labour. */
+  campFarm?: boolean;
+  /** Ticks of peasant labour left on a floodplain farm. It grows only while this is > 0. */
+  tended?: number;
   /** Cosmetic seed so identical buildings do not look identical. */
   variant: number;
   /** Ticks the building has been standing, for gentle art variation. */
@@ -293,6 +297,27 @@ export class City {
     return BUILDING_BY_ID[b.defId];
   }
 
+  /**
+   * A farm on the black land is worked by peasants walking out from a work camp, as in
+   * Pharaoh, not by the city's own labour pool. The same farm laid out on the meadow
+   * hires its own hands instead.
+   */
+  isCampFarm(def: BuildingDef, x: number, y: number): boolean {
+    if (!def.campWorked) return false;
+    let fp = 0;
+    for (let dy = 0; dy < def.size; dy++) {
+      for (let dx = 0; dx < def.size; dx++) {
+        if (this.world.inBounds(x + dx, y + dy) && this.world.terrain[this.world.idx(x + dx, y + dy)] === Terrain.Floodplain) fp++;
+      }
+    }
+    return fp * 2 > def.size * def.size;
+  }
+
+  /** How many of the city's workers this building wants. */
+  workersFor(b: Building): number {
+    return b.campFarm ? 0 : this.def(b).workers;
+  }
+
   countOf(defId: string): number {
     return this.countsByDef.get(defId) ?? 0;
   }
@@ -338,6 +363,7 @@ export class City {
     if (def.storage) {
       b.orders = {};
     }
+    b.campFarm = this.isCampFarm(def, x, y);
 
     this.buildings[id] = b;
     this.liveBuildings.push(id);
@@ -496,9 +522,10 @@ export class City {
     }
 
     if (!b.enabled || !b.built) return;
+    if (b.campFarm && (b.tended ?? 0) > 0) b.tended!--;
 
     // A building with no road link cannot despatch anyone or receive deliveries.
-    const operational = b.staffing > 0 || def.workers === 0;
+    const operational = b.campFarm ? (b.tended ?? 0) > 0 : b.staffing > 0 || def.workers === 0;
 
     // Production.
     if (def.produces && operational) {
@@ -511,6 +538,9 @@ export class City {
             b.progress -= need;
             const qty = def.produceQty ?? 1;
             b.store[def.produces] = (b.store[def.produces] ?? 0) + qty;
+            for (const [g, q] of Object.entries(def.alsoProduces ?? {})) {
+              b.store[g as GoodId] = (b.store[g as GoodId] ?? 0) + (q as number);
+            }
           } else {
             b.progress = need; // stall at full, waiting for materials
           }
@@ -546,13 +576,19 @@ export class City {
       }
     }
 
-    // Producers push finished goods out to storage via cart pushers.
+    // Producers push finished goods out to storage via cart pushers — the main output
+    // first, then any by-product, so straw does not sit in a grain field forever.
     if (def.produces && b.hasRoad) {
-      const have = b.store[def.produces] ?? 0;
-      const batch = Math.max(4, Math.floor((def.produceQty ?? 8) / 2));
-      if (have >= batch && b.walkers.length < 3) {
-        if (this.walkers.spawnCart(b, def.produces, Math.min(have, batch * 2))) {
-          b.store[def.produces] = have - Math.min(have, batch * 2);
+      const outputs: [GoodId, number][] = [[def.produces, def.produceQty ?? 8]];
+      for (const [g, q] of Object.entries(def.alsoProduces ?? {})) outputs.push([g as GoodId, q as number]);
+      for (const [good, qty] of outputs) {
+        const have = b.store[good] ?? 0;
+        const batch = Math.max(4, Math.floor(qty / 2));
+        if (have >= batch && b.walkers.length < 3) {
+          if (this.walkers.spawnCart(b, good, Math.min(have, batch * 2))) {
+            b.store[good] = have - Math.min(have, batch * 2);
+            break;
+          }
         }
       }
     }
@@ -576,14 +612,19 @@ export class City {
   /** Ticks of progress this building earns this tick. */
   private productionRate(b: Building, def: BuildingDef): number {
     let rate = b.staffing;
-    if (def.cat === 'food' && def.terrain === 'floodplain') {
-      // Farms follow the Nile. Nothing grows while the fields are under water.
+    if (b.campFarm) {
+      // The black land follows the Nile: nothing grows under water, and nothing grows
+      // at all unless peasants have come out from a camp to work it.
       const i = this.world.idx(b.x + (b.size >> 1), b.y + (b.size >> 1));
       if (this.world.flooded[i]) return 0;
+      if ((b.tended ?? 0) <= 0) return 0;
       const season = this.season;
       const seasonMul = season === 'akhet' ? 0.15 : season === 'peret' ? 1.0 : 1.45;
       const fert = this.averageFertility(b);
-      rate *= seasonMul * (0.45 + (fert / 100) * 1.05);
+      rate = seasonMul * (0.45 + (fert / 100) * 1.05);
+    } else if (def.campWorked) {
+      // A meadow farm: its own staff, no flood to stop it, and no silt to feed it.
+      rate *= 0.62;
     }
     // Damage and fire slow a building down before they destroy it.
     rate *= 1 - clamp(b.damage / 200, 0, 0.5);
@@ -698,7 +739,7 @@ export class City {
       const b = this.buildings[id];
       if (!b) continue;
       const def = this.def(b);
-      if (def.cat !== 'food' || def.terrain !== 'floodplain') continue;
+      if (!b.campFarm) continue;
       if (b.staffing <= 0) continue;
       for (let dy = 0; dy < b.size; dy++) {
         for (let dx = 0; dx < b.size; dx++) {
@@ -853,6 +894,12 @@ export class City {
       const b = this.buildings[id];
       if (!b) continue;
       const def = this.def(b);
+      if (b.campFarm) {
+        // Its labour comes from the work camps, so it never enters the pool.
+        b.workers = 0;
+        b.staffing = (b.tended ?? 0) > 0 ? 1 : 0;
+        continue;
+      }
       if (!def.workers || !def.sector) {
         b.workers = 0;
         b.staffing = def.workers ? 0 : 1;

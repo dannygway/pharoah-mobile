@@ -71,20 +71,22 @@ const route = (
 
 /** Everything a starter village can build. */
 const BASIC = [
-  'road', 'house', 'well', 'farm_grain', 'farm_veg', 'granary', 'bazaar', 'storage_yard',
+  'road', 'house', 'well', 'farm_grain', 'farm_chickpea', 'farm_lettuce', 'work_camp',
+  'granary', 'bazaar', 'storage_yard',
   'clay_pit', 'potter', 'firehouse', 'architect_post', 'tax_collector', 'garden',
   'shrine_osiris', 'shrine_ra', 'temple_osiris', 'temple_ra', 'booth', 'juggler_school',
-  'reed_gatherer', 'straw_gatherer', 'fishing_wharf', 'hunting_lodge', 'roadblock',
+  'reed_gatherer', 'fishing_wharf', 'hunting_lodge', 'roadblock',
 ];
 
 const TRADE_TIER = [
   ...BASIC, 'trading_post', 'dock', 'water_supply', 'scribal_school', 'apothecary',
-  'farm_flax', 'weaver', 'brewery', 'timber_yard', 'copper_mine', 'quarry_limestone',
+  'farm_flax', 'farm_barley', 'farm_fig', 'farm_pomegranate', 'cattle_ranch',
+  'weaver', 'brewery', 'timber_yard', 'copper_mine', 'quarry_plainstone', 'quarry_limestone',
   'brickworks', 'temple_ptah', 'shrine_ptah', 'plaza', 'statue_sm', 'courthouse',
 ];
 
 const MONUMENT_TIER = [
-  ...TRADE_TIER, 'work_camp', 'bricklayer_guild', 'stonemason_guild', 'carpenter_guild',
+  ...TRADE_TIER, 'bricklayer_guild', 'stonemason_guild', 'carpenter_guild',
   'mon_mastaba', 'bandstand', 'conservatory', 'library', 'physician', 'mortuary',
   'quarry_sandstone', 'papyrus_maker', 'oracle', 'festival_square', 'mansion',
 ];

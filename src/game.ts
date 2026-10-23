@@ -16,7 +16,7 @@ import { Renderer } from './gl';
 import { Atlas, TILE_W, TILE_H } from './atlas';
 import { Input } from './input';
 import { AudioEngine } from './audio';
-import { BUILDING_BY_ID, BuildingDef, GoodId, GOD_IDS } from './data';
+import { BUILDING_BY_ID, BuildingDef, GoodId, GOD_IDS, GOOD_RENAMES, BUILDING_RENAMES } from './data';
 import { TICKS_PER_MONTH, TICKS_PER_YEAR } from './consts';
 import { Mission, missionById, MISSIONS } from './missions';
 
@@ -686,6 +686,7 @@ export class Game {
           progress: b.progress, store: b.store, fire: b.fire, damage: b.damage,
           enabled: b.enabled, variant: b.variant, age: b.age,
           house: b.house, monument: b.monument, garrison: b.garrison, orders: b.orders,
+          tended: b.tended,
         };
       }),
       systems: {
@@ -732,6 +733,7 @@ export class Game {
       c.buildings = new Array(maxId + 1).fill(null);
       c.liveBuildings = [];
       for (const bs of data.buildings) {
+        migrateBuilding(bs);
         const def = BUILDING_BY_ID[bs.defId];
         if (!def) continue;
         const b: Building = {
@@ -740,8 +742,9 @@ export class Game {
           store: bs.store ?? {}, fire: bs.fire, damage: bs.damage,
           walkerCooldown: 0, walkers: [], hasRoad: false, enabled: bs.enabled !== false,
           house: bs.house, monument: bs.monument, garrison: bs.garrison, orders: bs.orders,
-          variant: bs.variant ?? 0, age: bs.age ?? 0,
+          variant: bs.variant ?? 0, age: bs.age ?? 0, tended: bs.tended ?? 0,
         };
+        b.campFarm = c.isCampFarm(def, b.x, b.y);
         c.buildings[b.id] = b;
         c.liveBuildings.push(b.id);
         for (let dy = 0; dy < def.size; dy++) {
@@ -782,6 +785,32 @@ export class Game {
     } catch (e) {
       console.warn('Load failed', e);
       return false;
+    }
+  }
+}
+
+/**
+ * Bring a building from an older save up to date: renamed buildings, and goods that
+ * became Pharaoh's real crops. Without this an old city would lose its farms and its
+ * bazaars would hold goods the game no longer knows the name of.
+ */
+function migrateBuilding(bs: any): void {
+  if (BUILDING_RENAMES[bs.defId]) bs.defId = BUILDING_RENAMES[bs.defId];
+  const remap = (bag: Record<string, number> | undefined) => {
+    if (!bag) return;
+    for (const [from, to] of Object.entries(GOOD_RENAMES)) {
+      if (bag[from] !== undefined) {
+        bag[to] = (bag[to] ?? 0) + bag[from];
+        delete bag[from];
+      }
+    }
+  };
+  remap(bs.store);
+  remap(bs.house?.foods);
+  remap(bs.monument?.delivered);
+  if (bs.orders) {
+    for (const [from, to] of Object.entries(GOOD_RENAMES)) {
+      if (bs.orders[from] !== undefined) { bs.orders[to] = bs.orders[from]; delete bs.orders[from]; }
     }
   }
 }

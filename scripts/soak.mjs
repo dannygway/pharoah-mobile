@@ -36,13 +36,13 @@ const browser = await chromium.launch({
   executablePath: '/opt/pw-browsers/chromium',
   args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
 });
-const page = await browser.newPage({ viewport: { width: 402, height: 874 }, deviceScaleFactor: 2 });
+const page = await browser.newPage({ viewport: { width: 402, height: 874 }, deviceScaleFactor: 1 });
 
 const consoleErrors = [];
 page.on('pageerror', (e) => consoleErrors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
 
-await page.goto('http://localhost:4180/', { waitUntil: 'networkidle' });
+await page.goto('http://localhost:4180/', { waitUntil: 'load' });
 await page.waitForFunction(() => !!window.kemet?.game, null, { timeout: 60000 });
 await page.evaluate(() => {
   document.querySelector('.modal')?.classList.add('hidden');
@@ -83,14 +83,14 @@ const setup = await page.evaluate(() => {
   const mid = cells[Math.floor(cells.length / 2)];
   const byD = cells.map((cell, k) => ({ cell, k, d: Math.hypot(cell[0] - mid[0], cell[1] - mid[1]) }))
     .sort((a, b) => a.d - b.d);
-  for (const id of ['granary', 'bazaar', 'water_supply', 'temple_osiris', 'firehouse', 'architect_post']) {
+  for (const id of ['granary', 'bazaar', 'water_supply', 'temple_osiris', 'firehouse', 'architect_post', 'work_camp']) {
     for (let n = 0; n < byD.length; n += 2) {
       const { cell, k } = byD[n];
       if (used.has(k)) continue;
       if (c.place(id, cell[0], cell[1]) !== -1) { used.add(k); break; }
     }
   }
-  for (const id of ['farm_grain', 'farm_veg']) {
+  for (const id of ['farm_grain', 'farm_chickpea']) {
     for (let k = 0; k < cells.length; k++) {
       if (used.has(k)) continue;
       const [x, y] = cells[k];

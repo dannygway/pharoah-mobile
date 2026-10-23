@@ -153,13 +153,11 @@ const built = await page.evaluate(() => {
 
   // Wells are not in this list: they serve a radius, so they go inside the housing
   // cells rather than in the civic centre where they would reach nobody.
-  // Sized to a labour budget this district can actually meet. Ten service buildings
-  // wanting seventy-seven workers out of a workforce of sixty is a labour shortage, and
-  // a city that cannot staff its temple tells you nothing about whether priests reach
-  // houses. Granary 8, bazaar 8, water 6, temple 8, firehouse 6, three farms 30: sixty
-  // six jobs, which a district of about a hundred and sixty people can fill.
+  // Sized to a labour budget this district can actually meet: granary 5, bazaar 5,
+  // water 4, temple 6, firehouse 5, and a work camp of 20 whose peasants work the two
+  // floodplain farms — which, as in Pharaoh, hire no one themselves. Forty-five jobs.
   const wanted = [
-    'granary', 'bazaar', 'water_supply', 'temple_osiris', 'firehouse',
+    'granary', 'bazaar', 'water_supply', 'temple_osiris', 'firehouse', 'work_camp',
   ];
   // Services are interleaved with the cells left for housing rather than massed in
   // the middle. A roamer spends twenty-odd road tiles and turns for home, and cells sit
@@ -192,7 +190,7 @@ const built = await page.evaluate(() => {
   const shrineGods = ['osiris', 'ra', 'ptah', 'seth', 'bast'];
 
   let farms = 0;
-  for (const id of ['farm_grain', 'farm_veg']) {
+  for (const id of ['farm_grain', 'farm_chickpea']) {
     for (let k = 0; k < cells.length; k++) {
       if (usedCells.has(k)) continue;
       const [x, y] = cells[k];

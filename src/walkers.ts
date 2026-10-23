@@ -17,7 +17,7 @@ import { clamp } from './core';
 import {
   BuildingDef, GoodId, GOODS, ServiceId, FOOD_IDS, HOUSEHOLD_GOODS, RELIGION_SERVICE, GOD_IDS,
 } from './data';
-import { SERVICE_DURATION, TICKS_PER_TILE } from './consts';
+import { SERVICE_DURATION, TICKS_PER_TILE, TICKS_PER_MONTH } from './consts';
 import type { Building, City } from './sim';
 
 export type WalkerKind =
@@ -849,7 +849,12 @@ export class WalkerSystem {
         return;
       }
       case 'laborer': {
-        if (dest?.monument) dest.monument.laborDone += 12;
+        if (dest?.campFarm) {
+          // A peasant's season in the field: two months of work, banked up to four.
+          dest.tended = Math.min((dest.tended ?? 0) + TICKS_PER_MONTH * 2, TICKS_PER_MONTH * 4);
+        } else if (dest?.monument) {
+          dest.monument.laborDone += 12;
+        }
         this.kill(w.id);
         return;
       }

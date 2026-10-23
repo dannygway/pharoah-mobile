@@ -462,7 +462,12 @@ export class UI {
         body.append(row('Goods', goods.map((g) => `${GOODS[g].glyph}${Math.floor(h.goods[g]!)}`).join(' ')));
       }
     } else {
-      if (def.workers) {
+      if (b.campFarm) {
+        const months = (b.tended ?? 0) / (TICKS_PER_YEAR / 12);
+        body.append(row('Peasants', months > 0
+          ? `working it — ${months.toFixed(1)} months banked`
+          : 'none — needs a work camp in reach', months > 0 ? '' : 'warn'));
+      } else if (def.workers) {
         body.append(row('Workers', `${b.workers} / ${def.workers}`, b.staffing < 0.6 ? 'warn' : ''));
       }
       if (!b.hasRoad && def.needsRoad) {
@@ -553,8 +558,8 @@ export class UI {
       ? [['Food', FOOD_IDS]]
       : [
         ['Food', FOOD_IDS],
-        ['Raw materials', ['clay', 'reeds', 'straw', 'flax', 'timber', 'copper', 'gold', 'gems']],
-        ['Monument materials', ['limestone', 'sandstone', 'granite', 'bricks']],
+        ['Raw materials', ['barley', 'clay', 'reeds', 'straw', 'flax', 'timber', 'copper', 'gold', 'gems']],
+        ['Monument materials', ['plainstone', 'limestone', 'sandstone', 'granite', 'bricks']],
         ['Manufactured goods', ['pottery', 'linen', 'beer', 'papyrus', 'luxury', 'chests']],
         ['Military', ['weapons', 'chariots']],
       ];
@@ -659,7 +664,12 @@ export class UI {
         body.append(el('p', { class: 'blocker' }, h.blocker || 'All requirements met — it will advance shortly.'));
       }
     } else {
-      if (def.workers) body.append(row('Workers', `${b.workers} of ${def.workers} (${def.sector})`));
+      if (b.campFarm) {
+        body.append(row('Worked by', 'peasants from a work camp'));
+        body.append(el('p', { class: 'hint' }, 'A farm on the black land hires no one. Peasants walk out from a work camp to plant and harvest it; nothing grows while they are away, or while the river covers the field. The same farm laid on the meadow hires its own hands, needs no camp, and yields less.'));
+      } else if (def.workers) {
+        body.append(row('Workers', `${b.workers} of ${def.workers} (${def.sector})`));
+      }
       if (def.consumes) {
         body.append(el('h4', {}, 'Consumes'));
         for (const [g, q] of Object.entries(def.consumes)) {
@@ -1614,6 +1624,8 @@ export class UI {
       el('p', {}, 'Pick a category along the bottom, then a building. While a building is armed, one finger positions it and lifting places it — two fingers still pan. Roads, walls, gardens and housing can be dragged out in a run.'),
       el('h4', {}, 'The thing that matters most'),
       el('p', {}, 'Nearly every service in this city is delivered by a person who walks out of a building, along a road, past your houses, and back. If there is no road, or the road leads somewhere else, the service never arrives. Compact loops of housing around a service block work; long ribbons do not.'),
+      el('h4', {}, 'Farms and work camps'),
+      el('p', {}, 'A farm on the black land hires no one: peasants walk out from a work camp to plant and harvest it, and nothing grows while they are away. Build a camp near your fields. While the river covers the fields the peasants go to your monuments instead, which is why great works rise during the flood. A farm on the meadow hires its own hands and needs no camp, but yields less. Grain farms also leave straw, which brickworks and cattle ranches need.'),
       el('h4', {}, 'The flood'),
       el('p', {}, 'The year has three seasons. During Akhet the Nile covers the floodplain and your farms stop entirely — you live on what is in the granary. When the water falls it leaves silt behind, and fertility recovers. A neglected Osiris means a poor flood and a hungry year.'),
       el('h4', {}, 'Housing'),

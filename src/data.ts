@@ -11,10 +11,10 @@
 
 export type GoodId =
   // foods
-  | 'grain' | 'vegetables' | 'fruit' | 'meat' | 'fish'
+  | 'grain' | 'lettuce' | 'chickpeas' | 'pomegranates' | 'figs' | 'fish' | 'game' | 'beef'
   // raw materials
-  | 'clay' | 'reeds' | 'straw' | 'flax' | 'timber' | 'copper' | 'gold' | 'gems'
-  | 'limestone' | 'sandstone' | 'granite' | 'bricks'
+  | 'barley' | 'clay' | 'reeds' | 'straw' | 'flax' | 'timber' | 'copper' | 'gold' | 'gems'
+  | 'plainstone' | 'limestone' | 'sandstone' | 'granite' | 'bricks'
   // manufactured
   | 'pottery' | 'linen' | 'beer' | 'papyrus' | 'luxury' | 'chests' | 'weapons' | 'chariots';
 
@@ -31,19 +31,24 @@ export interface GoodDef {
 
 export const GOODS: Record<GoodId, GoodDef> = {
   grain:      { id: 'grain',      name: 'Grain',      kind: 'food', value: 28,  glyph: '🌾', color: '#d8b24a' },
-  vegetables: { id: 'vegetables', name: 'Vegetables', kind: 'food', value: 24,  glyph: '🫒', color: '#7fa84c' },
-  fruit:      { id: 'fruit',      name: 'Fruit',      kind: 'food', value: 26,  glyph: '🍇', color: '#b0496b' },
-  meat:       { id: 'meat',       name: 'Meat',       kind: 'food', value: 32,  glyph: '🥩', color: '#a4553f' },
+  lettuce:    { id: 'lettuce',    name: 'Lettuce',    kind: 'food', value: 22,  glyph: '🥬', color: '#7fae4c' },
+  chickpeas:  { id: 'chickpeas',  name: 'Chickpeas',  kind: 'food', value: 24,  glyph: '🫘', color: '#c8a35a' },
+  pomegranates: { id: 'pomegranates', name: 'Pomegranates', kind: 'food', value: 30, glyph: '🍎', color: '#b0384b' },
+  figs:       { id: 'figs',       name: 'Figs',       kind: 'food', value: 28,  glyph: '🍇', color: '#6b3f6b' },
   fish:       { id: 'fish',       name: 'Fish',       kind: 'food', value: 26,  glyph: '🐟', color: '#5b93a8' },
+  game:       { id: 'game',       name: 'Game Meat',  kind: 'food', value: 32,  glyph: '🍖', color: '#a4553f' },
+  beef:       { id: 'beef',       name: 'Beef',       kind: 'food', value: 36,  glyph: '🥩', color: '#8f3f32' },
 
+  barley:     { id: 'barley',     name: 'Barley',     kind: 'raw',  value: 20,  glyph: '🌾', color: '#cdb062' },
   clay:       { id: 'clay',       name: 'Clay',       kind: 'raw',  value: 18,  glyph: '🟤', color: '#8a5a3b' },
   reeds:      { id: 'reeds',      name: 'Reeds',      kind: 'raw',  value: 16,  glyph: '🌿', color: '#6f8a45' },
   straw:      { id: 'straw',      name: 'Straw',      kind: 'raw',  value: 12,  glyph: '🌾', color: '#c9ae63' },
   flax:       { id: 'flax',       name: 'Flax',       kind: 'raw',  value: 22,  glyph: '🌱', color: '#9db56b' },
-  timber:     { id: 'timber',     name: 'Timber',     kind: 'raw',  value: 34,  glyph: '🪵', color: '#7a5433' },
+  timber:     { id: 'timber',     name: 'Wood',     kind: 'raw',  value: 34,  glyph: '🪵', color: '#7a5433' },
   copper:     { id: 'copper',     name: 'Copper',     kind: 'raw',  value: 46,  glyph: '🟠', color: '#b5713c' },
   gold:       { id: 'gold',       name: 'Gold',       kind: 'raw',  value: 90,  glyph: '🟡', color: '#e0b437' },
   gems:       { id: 'gems',       name: 'Gems',       kind: 'raw',  value: 110, glyph: '💎', color: '#59a5c4' },
+  plainstone: { id: 'plainstone', name: 'Plain Stone', kind: 'raw', value: 24, glyph: '🪨', color: '#b7aa92' },
   limestone:  { id: 'limestone',  name: 'Limestone',  kind: 'raw',  value: 40,  glyph: '⬜', color: '#cdc3a8' },
   sandstone:  { id: 'sandstone',  name: 'Sandstone',  kind: 'raw',  value: 42,  glyph: '🟨', color: '#c9a172' },
   granite:    { id: 'granite',    name: 'Granite',    kind: 'raw',  value: 58,  glyph: '⬛', color: '#8d7f76' },
@@ -59,7 +64,16 @@ export const GOODS: Record<GoodId, GoodDef> = {
   chariots:   { id: 'chariots',   name: 'Chariots',   kind: 'good', value: 160, glyph: '🛞', color: '#8a6a44' },
 };
 
-export const FOOD_IDS: GoodId[] = ['grain', 'vegetables', 'fruit', 'meat', 'fish'];
+export const FOOD_IDS: GoodId[] = ['grain', 'lettuce', 'chickpeas', 'pomegranates', 'figs', 'fish', 'game', 'beef'];
+
+/** Old good ids from earlier saves, and what they became. */
+export const GOOD_RENAMES: Record<string, GoodId> = {
+  vegetables: 'chickpeas', fruit: 'pomegranates', meat: 'game',
+};
+/** Old building ids from earlier saves, and what they became. */
+export const BUILDING_RENAMES: Record<string, string> = {
+  farm_veg: 'farm_chickpea', farm_fruit: 'farm_pomegranate',
+};
 /** Goods a household consumes, in the order houses come to want them. */
 export const HOUSEHOLD_GOODS: GoodId[] = ['pottery', 'linen', 'beer', 'luxury', 'chests'];
 export const ALL_GOOD_IDS = Object.keys(GOODS) as GoodId[];
@@ -252,6 +266,13 @@ export interface BuildingDef {
   /** Desirability emitted: value at the building, falling by `step` every `stepRange` tiles. */
   desirability?: { value: number; range: number; step: number };
 
+  /**
+   * A floodplain farm hires no one: peasants from a work camp walk out to work it. If
+   * the same farm is laid on the meadow instead it hires its own hands, and yields less.
+   */
+  campWorked?: boolean;
+  /** A second output from the same harvest — grain farms leave straw. */
+  alsoProduces?: Partial<Record<GoodId, number>>;
   /** Service this building's roaming walker delivers. */
   service?: ServiceId;
   /** Extra services delivered by the same walker (e.g. a temple complex). */
@@ -284,7 +305,7 @@ export interface BuildingDef {
   diseaseRisk?: number;
 
   /** Terrain the building must sit on. */
-  terrain?: 'any' | 'floodplain' | 'water-adjacent' | 'rock' | 'dry' | 'marsh';
+  terrain?: 'any' | 'floodplain' | 'farmland' | 'water-adjacent' | 'rock' | 'dry' | 'marsh';
   /** Must touch a road tile to function. */
   needsRoad?: boolean;
 
@@ -380,42 +401,66 @@ export const BUILDINGS: BuildingDef[] = [
 
   // ---------------- Food ----------------
   {
-    id: 'farm_grain', name: 'Barley Farm', cat: 'food', size: 3, cost: 40, upkeep: 2, workers: 10,
-    sector: 'food', terrain: 'floodplain', needsRoad: true,
-    desc: 'Barley from the black land. Yield rises and falls with the fertility left by the inundation.',
-    produces: 'grain', produceQty: 90, cycleTicks: 900,
+    id: 'farm_grain', name: 'Grain Farm', cat: 'food', size: 3, cost: 40, upkeep: 2, workers: 10,
+    sector: 'food', terrain: 'farmland', needsRoad: true, campWorked: true,
+    desc: 'Emmer wheat on the black land. Its stalks are the straw your brickworks and cattle need. Worked by peasants from a work camp; on the meadow it hires its own hands.',
+    produces: 'grain', produceQty: 90, cycleTicks: 900, alsoProduces: { straw: 30 },
     desirability: D(-2, 3, 1),
-    art: { style: 'farm', base: '#8a7a44', roof: '#b9a05c', height: 6 },
+    art: { style: 'farm', base: '#8a7a44', roof: '#c9ad5c', height: 6 },
   },
   {
-    id: 'farm_veg', name: 'Chickpea Farm', cat: 'food', size: 3, cost: 40, upkeep: 2, workers: 10,
-    sector: 'food', terrain: 'floodplain', needsRoad: true,
-    desc: 'Pulses and greens. A second food type is the gate to a great many housing levels.',
-    produces: 'vegetables', produceQty: 76, cycleTicks: 900,
+    id: 'farm_barley', name: 'Barley Farm', cat: 'food', size: 3, cost: 40, upkeep: 2, workers: 10,
+    sector: 'food', terrain: 'farmland', needsRoad: true, campWorked: true,
+    desc: 'Barley for the brewery. Not eaten as it is — every jar of beer starts here.',
+    produces: 'barley', produceQty: 70, cycleTicks: 900,
     desirability: D(-2, 3, 1),
-    art: { style: 'farm', base: '#6f8a45', roof: '#8fae5c', height: 6 },
+    art: { style: 'farm', base: '#8c7c46', roof: '#d1b664', height: 6 },
   },
   {
-    id: 'farm_fruit', name: 'Pomegranate Grove', cat: 'food', size: 3, cost: 55, upkeep: 2, workers: 10,
-    sector: 'food', terrain: 'floodplain', needsRoad: true,
-    desc: 'Orchard fruit. Slower to bear than grain but prized on the trade routes.',
-    produces: 'fruit', produceQty: 64, cycleTicks: 1050,
+    id: 'farm_flax', name: 'Flax Farm', cat: 'food', size: 3, cost: 50, upkeep: 2, workers: 10,
+    sector: 'food', terrain: 'farmland', needsRoad: true, campWorked: true,
+    desc: 'Not food, but the fibre behind every bolt of linen your weavers will ever make.',
+    produces: 'flax', produceQty: 44, cycleTicks: 950,
+    desirability: D(-2, 3, 1),
+    art: { style: 'farm', base: '#7d8a5a', roof: '#a9b57a', height: 6 },
+  },
+  {
+    id: 'farm_lettuce', name: 'Lettuce Farm', cat: 'food', size: 3, cost: 40, upkeep: 2, workers: 10,
+    sector: 'food', terrain: 'farmland', needsRoad: true, campWorked: true,
+    desc: 'Quick to grow and quick to spoil. A second food type opens a great many housing levels.',
+    produces: 'lettuce', produceQty: 80, cycleTicks: 820,
+    desirability: D(-2, 3, 1),
+    art: { style: 'farm', base: '#6f8a45', roof: '#94b85c', height: 6 },
+  },
+  {
+    id: 'farm_chickpea', name: 'Chickpea Farm', cat: 'food', size: 3, cost: 40, upkeep: 2, workers: 10,
+    sector: 'food', terrain: 'farmland', needsRoad: true, campWorked: true,
+    desc: 'Pulses that keep. A dependable second or third food for the bazaar.',
+    produces: 'chickpeas', produceQty: 76, cycleTicks: 900,
+    desirability: D(-2, 3, 1),
+    art: { style: 'farm', base: '#7a7a45', roof: '#bfa45c', height: 6 },
+  },
+  {
+    id: 'farm_pomegranate', name: 'Pomegranate Farm', cat: 'food', size: 3, cost: 55, upkeep: 2, workers: 10,
+    sector: 'food', terrain: 'farmland', needsRoad: true, campWorked: true,
+    desc: 'An orchard: slow to bear, prized at table and on the trade routes.',
+    produces: 'pomegranates', produceQty: 60, cycleTicks: 1050,
     desirability: D(1, 3, 1),
     art: { style: 'farm', base: '#6a7f3c', roof: '#a84f66', height: 9 },
   },
   {
-    id: 'farm_flax', name: 'Flax Farm', cat: 'food', size: 3, cost: 50, upkeep: 2, workers: 10,
-    sector: 'food', terrain: 'floodplain', needsRoad: true,
-    desc: 'Not food, but the fibre behind every bolt of linen your weavers will ever make.',
-    produces: 'flax', produceQty: 40, cycleTicks: 950,
-    desirability: D(-2, 3, 1),
-    art: { style: 'farm', base: '#7d8a5a', roof: '#a9b57a', height: 6 },
+    id: 'farm_fig', name: 'Fig Farm', cat: 'food', size: 3, cost: 55, upkeep: 2, workers: 10,
+    sector: 'food', terrain: 'farmland', needsRoad: true, campWorked: true,
+    desc: 'Fig trees in rows. Sweet, valued, and a food type all of its own.',
+    produces: 'figs', produceQty: 62, cycleTicks: 1050,
+    desirability: D(1, 3, 1),
+    art: { style: 'farm', base: '#5f7a3c', roof: '#7a4f7a', height: 9 },
   },
   {
     id: 'hunting_lodge', name: 'Hunting Lodge', cat: 'food', size: 2, cost: 40, upkeep: 2, workers: 6,
     sector: 'food', terrain: 'dry', needsRoad: true,
     desc: 'Hunters bring down gazelle and ostrich on the red land. Independent of the flood.',
-    produces: 'meat', produceQty: 50, cycleTicks: 800,
+    produces: 'game', produceQty: 50, cycleTicks: 800,
     desirability: D(-3, 3, 1),
     art: { style: 'reed', base: '#8a6a45', roof: '#6b5334', height: 10 },
   },
@@ -446,12 +491,12 @@ export const BUILDINGS: BuildingDef[] = [
     art: { style: 'reed', base: '#6f8a45', roof: '#55702f', height: 8 },
   },
   {
-    id: 'straw_gatherer', name: 'Straw Gatherer', cat: 'industry', size: 2, cost: 30, upkeep: 1, workers: 5,
-    sector: 'industry', needsRoad: true,
-    desc: 'Chaff bound into bales. Mixed with clay it becomes mud brick.',
-    produces: 'straw', produceQty: 24, cycleTicks: 560,
-    desirability: D(-2, 3, 1),
-    art: { style: 'reed', base: '#c9ae63', roof: '#a08a44', height: 7 },
+    id: 'cattle_ranch', name: 'Cattle Ranch', cat: 'food', size: 3, cost: 70, upkeep: 3, workers: 8,
+    sector: 'food', terrain: 'dry', needsRoad: true,
+    desc: 'Longhorn cattle fattened on straw. Beef is a food type of its own and a rich one.',
+    consumes: { straw: 8 }, produces: 'beef', produceQty: 30, cycleTicks: 900,
+    desirability: D(-5, 4, 2),
+    art: { style: 'reed', base: '#9a7a4e', roof: '#7a5a34', height: 8 },
   },
   {
     id: 'potter', name: 'Potter', cat: 'industry', size: 2, cost: 60, upkeep: 3, workers: 8,
@@ -481,7 +526,7 @@ export const BUILDINGS: BuildingDef[] = [
     id: 'brewery', name: 'Brewery', cat: 'industry', size: 2, cost: 70, upkeep: 3, workers: 8,
     sector: 'industry', needsRoad: true,
     desc: 'Barley mash fermented in vats. Beer is wages, medicine and celebration in one jar.',
-    consumes: { grain: 12 }, produces: 'beer', produceQty: 9, cycleTicks: 700,
+    consumes: { barley: 12 }, produces: 'beer', produceQty: 9, cycleTicks: 700,
     desirability: D(-4, 4, 2), fireRisk: 0.62,
     art: { style: 'mud', base: '#a08447', roof: '#755c2f', height: 12 },
   },
@@ -526,7 +571,7 @@ export const BUILDINGS: BuildingDef[] = [
     art: { style: 'mud', base: '#8a6a44', roof: '#5f4a2e', height: 14 },
   },
   {
-    id: 'timber_yard', name: 'Timber Yard', cat: 'industry', size: 2, cost: 60, upkeep: 3, workers: 8,
+    id: 'timber_yard', name: 'Wood Cutter', cat: 'industry', size: 2, cost: 60, upkeep: 3, workers: 8,
     sector: 'industry', needsRoad: true,
     desc: 'Fells and squares acacia and sycamore. Egypt has little good wood; guard what you have.',
     produces: 'timber', produceQty: 12, cycleTicks: 760,
@@ -556,6 +601,14 @@ export const BUILDINGS: BuildingDef[] = [
     produces: 'gems', produceQty: 6, cycleTicks: 940,
     desirability: D(-8, 5, 2),
     art: { style: 'mine', base: '#59a5c4', roof: '#356e85', height: 8 },
+  },
+  {
+    id: 'quarry_plainstone', name: 'Plain Stone Quarry', cat: 'industry', size: 2, cost: 80, upkeep: 4, workers: 10,
+    sector: 'industry', terrain: 'rock', needsRoad: true,
+    desc: 'Rough local stone. The mastaba and the lower courses of greater things are built of it.',
+    produces: 'plainstone', produceQty: 14, cycleTicks: 820,
+    desirability: D(-8, 5, 2),
+    art: { style: 'mine', base: '#b7aa92', roof: '#8a7f6a', height: 6 },
   },
   {
     id: 'quarry_limestone', name: 'Limestone Quarry', cat: 'industry', size: 3, cost: 110, upkeep: 5, workers: 14,
@@ -788,9 +841,9 @@ export const BUILDINGS: BuildingDef[] = [
     art: { style: 'stone', base: '#dcccA0', roof: '#8f7442', height: 28 },
   },
   {
-    id: 'work_camp', name: 'Work Camp', cat: 'government', size: 2, cost: 60, upkeep: 3, workers: 20,
-    sector: 'monument', needsRoad: true,
-    desc: 'Corvée labourers, fed and housed. Nothing monumental is raised without them.',
+    id: 'work_camp', name: 'Work Camp', cat: 'food', size: 2, cost: 60, upkeep: 3, workers: 20,
+    sector: 'food', needsRoad: true,
+    desc: 'Peasants who walk out to plant and harvest the floodplain farms. While the river covers the fields they go to the monuments instead — which is why the great works rise during the flood.',
     desirability: D(-6, 4, 2),
     art: { style: 'reed', base: '#a88a5a', roof: '#7a6238', height: 8 },
   },
@@ -910,7 +963,7 @@ export const BUILDINGS: BuildingDef[] = [
       stages: [
         { name: 'Excavate the shaft', materials: {}, labor: 400 },
         { name: 'Lay the brick core', materials: { bricks: 120 }, labor: 900 },
-        { name: 'Face and seal', materials: { bricks: 60, limestone: 40 }, labor: 600 },
+        { name: 'Face and seal', materials: { bricks: 60, plainstone: 50 }, labor: 600 },
       ],
     },
     art: { style: 'monument', base: '#a67f56', roof: '#8a6742', height: 26 },
@@ -923,7 +976,7 @@ export const BUILDINGS: BuildingDef[] = [
       points: 40,
       stages: [
         { name: 'Level the platform', materials: {}, labor: 900 },
-        { name: 'Raise the first tiers', materials: { bricks: 240, limestone: 120 }, labor: 2000 },
+        { name: 'Raise the first tiers', materials: { bricks: 160, plainstone: 200 }, labor: 2000 },
         { name: 'Raise the upper tiers', materials: { limestone: 220, granite: 40 }, labor: 2400 },
         { name: 'Dress the casing', materials: { limestone: 160 }, labor: 1400 },
       ],
