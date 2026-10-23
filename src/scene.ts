@@ -173,6 +173,8 @@ export class Scene {
    * recomputed per frame: the road graph only changes when something is built.
    */
   halo: { building: number; roads: Set<number>; served: Set<number>; range: number } | null = null;
+  /** The same, under the placement ghost: where the armed building would reach. */
+  ghost: { roads: Set<number>; served: Set<number>; area: Set<number> | null } | null = null;
 
   /** Footprint tiles of every building currently reporting a fault, for the Problems overlay. */
   private problemTiles = new Set<number>();
@@ -251,7 +253,8 @@ export class Scene {
       }
     }
     if (this.overlay !== 'none') this.drawOverlay(city, x0, y0, x1, y1);
-    if (this.halo) this.drawHalo(city, x0, y0, x1, y1, time);
+    if (this.ghost) this.drawHalo(this.ghost, city, x0, y0, x1, y1, time);
+    else if (this.halo) this.drawHalo(this.halo, city, x0, y0, x1, y1, time);
     this.drawObjects(city, systems, x0, y0, x1, y1, time, light);
     this.drawCursor(city);
 
@@ -522,8 +525,10 @@ export class Scene {
    * actually receive the service. Everything outside is simply left alone — the
    * absence is the diagnosis.
    */
-  private drawHalo(city: City, x0: number, y0: number, x1: number, y1: number, time: number): void {
-    const h = this.halo!;
+  private drawHalo(
+    h: { roads: Set<number>; served: Set<number>; area?: Set<number> | null },
+    city: City, x0: number, y0: number, x1: number, y1: number, time: number,
+  ): void {
     const r = this.renderer;
     const w = city.world;
     const sp = this.atlas.get('ui_overlay');
@@ -536,6 +541,7 @@ export class Scene {
         const [wx, wy] = tileToWorld(tx, ty);
         if (h.roads.has(i)) r.draw(sp, wx, wy, 1, 0.42, 0.86, 1.0, pulse);
         else if (h.served.has(i)) r.draw(sp, wx, wy, 1, 1.0, 0.82, 0.36, pulse * 0.85);
+        else if (h.area?.has(i)) r.draw(sp, wx, wy, 1, 0.42, 0.86, 1.0, pulse * 0.45);
       }
     }
   }

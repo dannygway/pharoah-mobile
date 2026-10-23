@@ -19,6 +19,7 @@ import { MISSIONS, SANDBOX, ALL_MISSIONS, Mission } from './missions';
 import { TICKS_PER_YEAR } from './consts';
 import { settings, updateSettings, GraphicsMode } from './settings';
 import { haptic } from './haptics';
+import { GUIDE, GUIDE_MISSIONS, currentStep } from './guide';
 import { Terrain } from './world';
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,9 @@ export class UI {
   private minimap!: HTMLCanvasElement;
   private minimapWrap!: HTMLElement;
   private goalsPanel!: HTMLElement;
+  private floatLayer!: HTMLElement;
+  private guideEl!: HTMLElement;
+  private hintEl!: HTMLElement;
 
   private sheetView: string | null = null;
   private activeCategory: BuildCategory | null = null;
@@ -97,12 +101,197 @@ export class UI {
     this.game = game;
     this.root = root;
     this.build();
+    this.hook(game);
+  }
+
+  /** Listen to a game: every callback the UI answers. */
+  private hook(game: Game): void {
     game.onChange = () => this.refresh();
     game.onStatusChange = (s) => this.showOutcome(s);
-    game.onInspect = (id) => {
-      if (id >= 0) this.openBuildingDetail(id);
-    };
+    game.onInspect = (id) => { if (id >= 0) this.openBuildingDetail(id); };
     game.onUndoAvailable = (label) => this.showUndo(label);
+    game.onCityEvent = (e) => this.floatForEvent(e);
+    game.onPlaced = (tiles, defId) => {
+      const def = BUILDING_BY_ID[defId];
+      const cost = (def?.cost ?? 0) * tiles.length;
+      if (cost > 0) this.floatAt(tiles[tiles.length - 1], `−${money(cost)}`, 'cost');
+    };
+    game.onPlaceHint = () => { /* positioned every frame in tick() */ };
+  }
+
+  // -------------------------------------------------------------------------
+  // The first-mission guide
+  // -------------------------------------------------------------------------
+
+  private guideTimer = 0;
+  /** Which step the card shows, so it is only rebuilt when the step changes. */
+  private guideShown = '';
+  private guideCollapsed = false;
+
+  private refreshGuide(): void {
+    const g = this.game;
+    const node = this.guideEl;
+    const blocked = !settings().guide || !GUIDE_MISSIONS.includes(g.mission.id) || g.status !== 'playing' ||
+      !this.modal.classList.contains('hidden') || !this.card.classList.contains('hidden') ||
+      (!this.sheet.classList.contains('hidden') && innerHeight > innerWidth);
+    if (blocked) {
+      if (!node.classList.contains('hidden')) node.classList.add('hidden');
+      return;
+    }
+    node.classList.remove('hidden');
+    node.classList.toggle('collapsed', this.guideCollapsed || g.armed !== null);
+
+    const cur = currentStep(g);
+    const key = cur ? cur.step.id : 'done';
+    if (key === this.guideShown) return;
+    const advanced = this.guideShown !== '';
+    this.guideShown = key;
+    this.guideCollapsed = false;
+    node.classList.remove('collapsed');
+    clear(node);
+
+    if (advanced) {
+      g.audio.chime(true);
+      haptic('light');
+      node.classList.remove('flash');
+      void node.offsetWidth;
+      node.classList.add('flash');
+    }
+
+    const head = (label: string, title: string) => el('div', {
+      class: 'g-head', onclick: () => {
+        this.guideCollapsed = !this.guideCollapsed;
+        node.classList.toggle('collapsed', this.guideCollapsed);
+      },
+    }, el('span', { class: 'g-step' }, label), el('span', { class: 'g-title' }, title), el('span', { class: 'g-caret' }, '▾'));
+
+    if (!cur) {
+      node.append(
+        head('Guide', 'The village stands'),
+        el('p', { class: 'g-detail' }, 'Now grow it. Your goals are under 🎯; the advisors say what each house is still missing.'),
+        el('div', { class: 'g-actions' },
+          el('button', { class: 'g-show', onclick: () => { updateSettings({ guide: false }); this.refreshGuide(); } }, 'Done')));
+      return;
+    }
+    const total = GUIDE.filter((s) => s.build.some((id) => g.isUnlocked(id))).length;
+    const n = GUIDE.filter((s, i) => i < cur.index && s.build.some((id) => g.isUnlocked(id))).length + 1;
+    node.append(
+      head(`${n}/${total}`, cur.step.title),
+      el('p', { class: 'g-detail' }, cur.step.detail),
+      el('div', { class: 'g-actions' },
+        el('button', { class: 'g-show', onclick: () => this.guideShowMe() }, 'Show me'),
+        el('button', { class: 'g-hide', onclick: () => { updateSettings({ guide: false }); this.refreshGuide(); } }, 'Hide guide')));
+  }
+
+  /** Arm the building the current step asks for, and look somewhere it can go. */
+  private guideShowMe(): void {
+    const g = this.game;
+    const cur = currentStep(g);
+    if (!cur) return;
+    const options = cur.step.build.filter((id) => g.isUnlocked(id));
+    const pick = options.find((id) => g.city.countOf(id) === 0) ?? options[0];
+    if (!pick) return;
+    this.closeSheet();
+    g.arm(pick);
+    if (cur.step.seek === 'floodplain') g.lookAtFloodplain();
+    g.audio.tap();
+    haptic('light');
+    this.refresh();
+  }
+
+  // -------------------------------------------------------------------------
+  // Floating feedback: short words that rise from where something happened
+  // -------------------------------------------------------------------------
+
+  private floats: { node: HTMLElement; wx: number; wy: number; age: number; life: number; sx?: number; sy?: number }[] = [];
+
+  private floatAt(tile: number, text: string, kind: string): void {
+    const g = this.game;
+    const w = g.world;
+    if (tile < 0) return;
+    const [wx, wy] = tileToWorld(w.xOf(tile), w.yOf(tile));
+    // Only for what the player can see.
+    const [sx, sy] = g.scene.camera.worldToScreen(wx, wy, g.renderer.viewW, g.renderer.viewH);
+    if (sx < -40 || sy < -40 || sx > g.renderer.viewW + 40 || sy > g.renderer.viewH + 40) return;
+    this.pushFloat(text, kind, { wx, wy });
+  }
+
+  private floatAtScreen(sx: number, sy: number, text: string, kind: string): void {
+    this.pushFloat(text, kind, { sx, sy });
+  }
+
+  private pushFloat(text: string, kind: string, at: { wx?: number; wy?: number; sx?: number; sy?: number }): void {
+    if (this.floats.length >= 10) this.floats.shift()!.node.remove();
+    const node = el('div', { class: `float ${kind}` }, text);
+    this.floatLayer.appendChild(node);
+    this.floats.push({ node, wx: at.wx ?? 0, wy: at.wy ?? 0, sx: at.sx, sy: at.sy, age: 0, life: 1.8 });
+  }
+
+  private floatForEvent(e: { kind: string; tile: number; value: number }): void {
+    switch (e.kind) {
+      case 'evolve': this.floatAt(e.tile, `▲ ${HOUSING[e.value]?.name ?? ''}`, 'up'); break;
+      case 'devolve': this.floatAt(e.tile, `▼ ${HOUSING[e.value]?.name ?? ''}`, 'down'); break;
+      case 'grow': this.floatAt(e.tile, 'Plot grows', 'up'); break;
+      case 'fire': this.floatAt(e.tile, 'Fire!', 'down'); break;
+      case 'collapse': this.floatAt(e.tile, 'Collapsed', 'down'); break;
+      case 'stage': this.floatAt(e.tile, 'Stage complete', 'up'); break;
+      case 'tax': {
+        const pill = this.topBar.querySelector('.funds');
+        if (!pill) break;
+        const r = pill.getBoundingClientRect();
+        this.floatAtScreen(r.left + r.width / 2, r.bottom + 6, `+${money(e.value)}`, 'gain');
+        break;
+      }
+    }
+  }
+
+  private tickFloats(dt: number): void {
+    const g = this.game;
+    const cam = g.scene.camera;
+    for (let i = this.floats.length - 1; i >= 0; i--) {
+      const f = this.floats[i];
+      f.age += dt;
+      if (f.age >= f.life) {
+        f.node.remove();
+        this.floats.splice(i, 1);
+        continue;
+      }
+      const k = f.age / f.life;
+      let x: number, y: number;
+      if (f.sx !== undefined) {
+        x = f.sx;
+        y = f.sy! + k * 26;
+      } else {
+        [x, y] = cam.worldToScreen(f.wx, f.wy, g.renderer.viewW, g.renderer.viewH);
+        y -= 30 + k * 40;
+      }
+      const o = k < 0.15 ? k / 0.15 : k > 0.7 ? (1 - k) / 0.3 : 1;
+      f.node.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+      f.node.style.opacity = o.toFixed(2);
+    }
+  }
+
+  /** The line of advice beside the placement ghost, kept above the finger. */
+  private tickPlaceHint(): void {
+    const g = this.game;
+    const h = g.armed ? g.placeHint : null;
+    const node = this.hintEl;
+    if (!h) {
+      if (!node.classList.contains('hidden')) node.classList.add('hidden');
+      return;
+    }
+    if (node.textContent !== h.text) node.textContent = h.text;
+    const cls = `place-hint ${h.tone}`;
+    if (node.className !== cls) node.className = cls;
+    const w = g.world;
+    const [wx, wy] = tileToWorld(w.xOf(h.tile), w.yOf(h.tile));
+    let [x, y] = g.scene.camera.worldToScreen(wx, wy, g.renderer.viewW, g.renderer.viewH);
+    // Well above the footprint, where a thumb is not.
+    y -= 64;
+    const half = node.offsetWidth / 2 + 8;
+    x = clamp(x, half, g.renderer.viewW - half);
+    y = clamp(y, 70, g.renderer.viewH - 40);
+    node.style.transform = `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px) translate(-50%, -100%)`;
   }
 
   /**
@@ -145,6 +334,9 @@ export class UI {
     this.card = el('div', { class: 'card hidden' });
     this.chips = el('div', { class: 'mode-chips' });
     this.toastWrap = el('div', { class: 'toasts' });
+    this.floatLayer = el('div', { class: 'floats' });
+    this.hintEl = el('div', { class: 'place-hint hidden' });
+    this.guideEl = el('div', { class: 'guide hidden' });
 
     this.sheetTitle = el('div', { class: 'sheet-title' });
     this.sheetBody = el('div', { class: 'sheet-body' });
@@ -158,7 +350,7 @@ export class UI {
     this.modal = el('div', { class: 'modal hidden' });
 
     this.root.append(
-      this.topBar, this.goalsPanel, this.minimapWrap, this.chips, this.card,
+      this.topBar, this.floatLayer, this.hintEl, this.guideEl, this.goalsPanel, this.minimapWrap, this.chips, this.card,
       this.toastWrap, this.sheet, this.bottomBar, this.modal,
     );
 
@@ -253,6 +445,13 @@ export class UI {
   /** Called every frame from the game loop for the cheap, always-changing bits. */
   tick(dt: number): void {
     const c = this.game.city;
+    if (this.floats.length) this.tickFloats(dt);
+    this.tickPlaceHint();
+    this.guideTimer += dt;
+    if (this.guideTimer > 0.6) {
+      this.guideTimer = 0;
+      this.refreshGuide();
+    }
     // Write only what changed. Every DOM write can cost iOS a style and layout pass, and
     // this runs every frame.
     const put = (sel: string, text: string) => {
@@ -1649,6 +1848,10 @@ export class UI {
     };
     const muteBtn = toggle((on) => on ? 'Sound: off' : 'Sound: on', () => settings().muted, (on) => updateSettings({ muted: on }));
     const hapticBtn = toggle((on) => on ? 'Haptics: on' : 'Haptics: off', () => settings().haptics, (on) => updateSettings({ haptics: on }));
+    const guideBtn = toggle((on) => on ? 'First-mission guide: on' : 'First-mission guide: off', () => settings().guide, (on) => {
+      updateSettings({ guide: on });
+      this.guideShown = '';
+    });
 
     // Graphics: what the phone spends on drawing.
     const gfx = el('div', { class: 'chip-grid' });
@@ -1686,6 +1889,8 @@ export class UI {
       slider('Effects', 'effects'),
       slider('Ambience', 'ambience'),
       hapticBtn,
+      el('h4', {}, 'Guidance'),
+      guideBtn,
       el('h4', {}, 'Graphics'),
       gfx,
       gfxNote,
@@ -1770,10 +1975,9 @@ export class UI {
   /** Swap in a fresh game (after loading or starting a mission). */
   rebind(game: Game): void {
     this.game = game;
-    game.onChange = () => this.refresh();
-    game.onStatusChange = (s) => this.showOutcome(s);
-    game.onInspect = (id) => { if (id >= 0) this.openBuildingDetail(id); };
-    game.onUndoAvailable = (label) => this.showUndo(label);
+    this.hook(game);
+    for (const f of this.floats) f.node.remove();
+    this.floats.length = 0;
     this.activeCategory = null;
     this.sheetView = null;
     this.sheet.classList.add('hidden');

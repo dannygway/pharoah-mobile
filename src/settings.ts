@@ -15,10 +15,12 @@ export interface Settings {
   ambience: number; // 0..1
   muted: boolean;
   haptics: boolean;
+  /** The step-by-step guide in the first mission. */
+  guide: boolean;
 }
 
 const DEFAULTS: Settings = {
-  graphics: 'balanced', music: 0.55, effects: 0.8, ambience: 0.6, muted: false, haptics: true,
+  graphics: 'balanced', music: 0.55, effects: 0.8, ambience: 0.6, muted: false, haptics: true, guide: true,
 };
 
 const KEY = 'kemet.settings';

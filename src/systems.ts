@@ -460,12 +460,21 @@ export class Systems {
    * that sends a walker out, and gated behind nothing.
    */
   reachabilityHalo(site: Building): { roads: number[]; served: number[]; range: number } | null {
-    const city = this.city;
-    const w = city.world;
-    const def = city.def(site);
+    const def = this.city.def(site);
     const range = def.walkerRange ?? 0;
     if (!range) return null;
-    const entrance = w.roadEntrance(site.x, site.y, site.size);
+    return this.reachFrom(site.x, site.y, site.size, range);
+  }
+
+  /**
+   * The same halo for a building that does not exist yet: where it would reach if it
+   * were set down with its corner at (x, y). Shown under the placement ghost, so the
+   * player sees the coverage before paying for it rather than after.
+   */
+  reachFrom(x: number, y: number, size: number, range: number): { roads: number[]; served: number[]; range: number } {
+    const city = this.city;
+    const w = city.world;
+    const entrance = w.roadEntrance(x, y, size);
     if (entrance < 0) return { roads: [], served: [], range };
 
     const roads = w.roadsWithin(entrance, range);
@@ -475,23 +484,53 @@ export class Systems {
     const seen = new Set<number>();
     const around: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (const t of roads) {
-      const x = w.xOf(t);
-      const y = w.yOf(t);
+      const rx = w.xOf(t);
+      const ry = w.yOf(t);
       for (const [dx, dy] of around) {
-        if (!w.inBounds(x + dx, y + dy)) continue;
-        const id = w.building[w.idx(x + dx, y + dy)];
+        if (!w.inBounds(rx + dx, ry + dy)) continue;
+        const id = w.building[w.idx(rx + dx, ry + dy)];
         if (id < 0 || seen.has(id)) continue;
         const b = city.buildings[id];
         if (!b?.house) continue;
         seen.add(id);
-        for (let by = 0; by < b.size; by++) {
-          for (let bx = 0; bx < b.size; bx++) {
-            if (w.inBounds(b.x + bx, b.y + by)) served.push(w.idx(b.x + bx, b.y + by));
-          }
-        }
+        this.pushFootprint(b, served);
       }
     }
     return { roads, served, range };
+  }
+
+  /** Houses inside a radius, for buildings that serve their neighbours directly (wells). */
+  directReachFrom(x: number, y: number, size: number, r: number): { area: number[]; served: number[] } {
+    const city = this.city;
+    const w = city.world;
+    const area: number[] = [];
+    const served: number[] = [];
+    const seen = new Set<number>();
+    for (let dy = -r; dy < r + size; dy++) {
+      for (let dx = -r; dx < r + size; dx++) {
+        const px = x + dx;
+        const py = y + dy;
+        if (!w.inBounds(px, py)) continue;
+        const i = w.idx(px, py);
+        area.push(i);
+        const id = w.building[i];
+        if (id < 0 || seen.has(id)) continue;
+        const b = city.buildings[id];
+        if (!b?.house) continue;
+        seen.add(id);
+        this.pushFootprint(b, served);
+      }
+    }
+    return { area, served };
+  }
+
+  private pushFootprint(b: Building, out: number[]): void {
+    const w = this.city.world;
+    for (let by = 0; by < b.size; by++) {
+      for (let bx = 0; bx < b.size; bx++) {
+        if (w.inBounds(b.x + bx, b.y + by)) out.push(w.idx(b.x + bx, b.y + by));
+      }
+    }
   }
 
   private findYardWith(from: Building, good: GoodId, min: number): number {

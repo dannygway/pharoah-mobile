@@ -15,7 +15,8 @@
     "soak": "npm run build && node scripts/soak.mjs",
     "test:housing": "npm run build && node scripts/housing.mjs",
     "bench": "npm run build && node scripts/bench.mjs",
-    "test:audio": "npm run build && node scripts/audio.mjs"
+    "test:audio": "npm run build && node scripts/audio.mjs",
+    "test:flow": "npm run build && node scripts/flow.mjs /tmp/kemet-flow"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

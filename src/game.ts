@@ -89,6 +89,8 @@ export class Game {
   onChange: (() => void) | null = null;
   /** Every city event, after its sound has played: the UI turns some into floating text. */
   onCityEvent: ((e: CityEvent) => void) | null = null;
+  /** Something was built: the tiles, and what. The UI floats the cost up from it. */
+  onPlaced: ((tiles: number[], defId: string) => void) | null = null;
   onStatusChange: ((s: GameStatus) => void) | null = null;
 
   private accumulator = 0;
@@ -395,7 +397,7 @@ export class Game {
           if (at.gain > 0.05 && this.allowSound('grow', 500)) a.grow(at.gain, at.pan);
           break;
         case 'tax':
-          if (this.allowSound('tax', 2000)) a.coins(e.value, 0.8);
+          if (this.allowSound('tax', 2000)) a.coins(e.value, 0.5);
           break;
         case 'fire':
           this.recentFire = Math.max(this.recentFire, at.gain);
@@ -529,6 +531,9 @@ export class Game {
     this.armed = defId;
     this.scene.showGrid = defId !== null;
     this.scene.previewTiles.length = 0;
+    this.scene.ghost = null;
+    this.hintKey = '';
+    this.setHint(null);
     if (defId) {
       const def = BUILDING_BY_ID[defId];
       this.scene.cursorSize = def?.size ?? 1;
@@ -537,6 +542,34 @@ export class Game {
       this.scene.cursorSize = 1;
     }
     this.onChange?.();
+  }
+
+  /**
+   * Glide the camera to the nearest open black land, unless some is already in view.
+   * Used by the guide, whose farm step otherwise asks a new player to find the
+   * floodplain on a map they have not yet learned to read.
+   */
+  lookAtFloodplain(): void {
+    const w = this.world;
+    const cam = this.scene.camera;
+    const [fx, fy] = worldToTile(cam.x, cam.y);
+    const cx = Math.round(fx), cy = Math.round(fy);
+    let best = -1, bestD = Infinity;
+    for (let y = 1; y < w.size - 3; y++) {
+      for (let x = 1; x < w.size - 3; x++) {
+        if (w.terrain[w.idx(x, y)] !== Terrain.Floodplain) continue;
+        const d = Math.hypot(x - cx, y - cy);
+        if (d >= bestD) continue;
+        if (!w.canPlace(x, y, 3, 'floodplain')) continue;
+        best = w.idx(x, y);
+        bestD = d;
+      }
+    }
+    if (best < 0 || bestD < 5) return;
+    const [wx, wy] = tileToWorld(w.xOf(best) + 1, w.yOf(best) + 1);
+    cam.tx = wx;
+    cam.ty = wy;
+    cam.tzoom = Math.max(cam.tzoom, 0.9);
   }
 
   /** Is this building available in the current mission? */
@@ -566,15 +599,115 @@ export class Game {
     this.scene.cursorSize = def.size;
     const x = this.world.xOf(t);
     const y = this.world.yOf(t);
+    const problem = this.placementProblem(def, x, y);
+    this.scene.cursorValid = problem === null;
+    this.updateGhost(def, x, y, t, problem);
+  }
+
+  /**
+   * Why the armed building cannot go here, in the player's words, or null if it can.
+   * Shown beside the ghost: a red footprint alone says no, and says nothing about what
+   * to do instead.
+   */
+  placementProblem(def: BuildingDef, x: number, y: number): string | null {
+    const w = this.world;
+    const t = w.idx(x, y);
     if (def.id === 'road' || def.id === 'plaza') {
-      this.scene.cursorValid =
-        this.world.terrain[t] !== 0 && this.world.building[t] === -1 &&
-        !(def.id === 'road' && this.world.road[t] === 1);
-    } else {
-      this.scene.cursorValid =
-        this.world.canPlace(x, y, def.size, def.terrain, def.terrain === 'rock') &&
-        this.city.funds >= def.cost;
+      if (w.terrain[t] === Terrain.Water) return 'Not on water';
+      if (w.building[t] !== -1) return 'Something is in the way';
+      if (def.id === 'road' && w.road[t] === 1) return 'Already a road';
+      return this.city.funds >= def.cost ? null : `Needs ${money(def.cost)} deben`;
     }
+    for (let dy = 0; dy < def.size; dy++) {
+      for (let dx = 0; dx < def.size; dx++) {
+        if (!w.inBounds(x + dx, y + dy)) return 'Off the edge of the map';
+        const i = w.idx(x + dx, y + dy);
+        if (w.building[i] !== -1 || w.road[i]) return 'Something is in the way';
+        if (w.terrain[i] === Terrain.Water) return 'Not on water';
+        if (w.terrain[i] === Terrain.Rock && def.terrain !== 'rock') return 'Not on rock';
+      }
+    }
+    if (!w.meetsTerrainRequirement(x, y, def.size, def.terrain)) {
+      switch (def.terrain) {
+        case 'floodplain': return 'Needs the black floodplain land';
+        case 'farmland': return 'Farms need floodplain or meadow';
+        case 'dry': return 'Needs dry ground above the flood';
+        case 'rock': return 'Needs rock to cut';
+        case 'marsh': return 'Needs marsh reeds';
+        case 'water-adjacent': return 'Must sit on the riverbank';
+        default: return 'Cannot build here';
+      }
+    }
+    if (this.city.funds < def.cost) return `Needs ${money(def.cost)} deben`;
+    return null;
+  }
+
+  /** What the placement hint last described, so it is only rebuilt when that changes. */
+  private hintKey = '';
+  /** The hint beside the ghost: text, tone, and the tile it sits over. */
+  placeHint: { text: string; tone: 'ok' | 'warn' | 'bad'; tile: number } | null = null;
+  onPlaceHint: ((h: { text: string; tone: 'ok' | 'warn' | 'bad'; tile: number } | null) => void) | null = null;
+
+  private setHint(h: { text: string; tone: 'ok' | 'warn' | 'bad'; tile: number } | null): void {
+    this.placeHint = h;
+    this.onPlaceHint?.(h);
+  }
+
+  /** Coverage under the ghost, and a line of advice beside it. */
+  private updateGhost(def: BuildingDef, x: number, y: number, t: number, problem: string | null): void {
+    const key = `${def.id}:${t}:${problem ?? ''}:${this.city.liveBuildings.length}`;
+    if (key === this.hintKey) return;
+    this.hintKey = key;
+    this.scene.ghost = null;
+    if (problem) {
+      this.setHint({ text: problem, tone: 'bad', tile: t });
+      return;
+    }
+    const w = this.world;
+    const cost = def.cost ? `${money(def.cost)} db` : '';
+    if (def.walkerRange) {
+      const r = this.systems.reachFrom(x, y, def.size, def.walkerRange);
+      if (!r.roads.length) {
+        this.setHint({ text: `Needs a road beside it · ${cost}`, tone: 'warn', tile: t });
+        return;
+      }
+      this.scene.ghost = { roads: new Set(r.roads), served: new Set(r.served), area: null };
+      const houses = this.countHouses(r.served);
+      this.setHint({ text: `Reaches ${houses} ${houses === 1 ? 'house' : 'houses'} · ${cost}`, tone: houses ? 'ok' : 'warn', tile: t });
+      return;
+    }
+    if (def.directRange) {
+      const r = this.systems.directReachFrom(x, y, def.size, def.directRange);
+      this.scene.ghost = { roads: new Set(), served: new Set(r.served), area: new Set(r.area) };
+      const houses = this.countHouses(r.served);
+      this.setHint({ text: `Waters ${houses} ${houses === 1 ? 'house' : 'houses'} · ${cost}`, tone: houses ? 'ok' : 'warn', tile: t });
+      return;
+    }
+    if (def.terrain === 'farmland' && def.campWorked) {
+      const black = w.meetsTerrainRequirement(x, y, def.size, 'floodplain');
+      const camps = this.city.countOf('work_camp');
+      const text = black
+        ? (camps ? 'Black land: peasants from the work camp farm it' : 'Black land: build a work camp to farm it')
+        : 'Meadow: hires its own farmers, yields less';
+      this.setHint({ text: `${text} · ${cost}`, tone: black && camps ? 'ok' : 'warn', tile: t });
+      return;
+    }
+    if (def.id === 'house') {
+      // Settlers only move into plots that touch a road.
+      this.setHint(w.touchesRoad(x, y, 1) ? null : { text: 'Settlers need a road beside the plot', tone: 'warn', tile: t });
+      return;
+    }
+    if (def.needsRoad !== false && def.workers > 0 && !w.touchesRoad(x, y, def.size)) {
+      this.setHint({ text: `Needs a road beside it · ${cost}`, tone: 'warn', tile: t });
+      return;
+    }
+    this.setHint(cost && def.size > 1 ? { text: cost, tone: 'ok', tile: t } : null);
+  }
+
+  private countHouses(tiles: number[]): number {
+    const ids = new Set<number>();
+    for (const t of tiles) ids.add(this.world.building[t]);
+    return ids.size;
   }
 
   /** Buildings the player paints in a stroke rather than placing one at a time. */
@@ -666,6 +799,11 @@ export class Game {
       else if (armed === 'road' || armed === 'plaza') this.audio.road();
       else this.audio.build();
       haptic(armed === DEMOLISH ? 'medium' : 'light');
+      // The spot is now taken; don't greet the success with "something is in the way".
+      this.scene.ghost = null;
+      this.hintKey = 'placed';
+      this.setHint(null);
+      if (armed !== DEMOLISH) this.onPlaced?.(done.map((d) => this.world.idx(d.x, d.y)), armed);
       this.lastAction = { kind: armed === DEMOLISH ? 'demolish' : 'place', tiles: done };
       const what = done.length > 1 ? `${done.length} structures`
         : (BUILDING_BY_ID[done[0].defId]?.name ?? 'structure').toLowerCase();
