@@ -11,6 +11,7 @@
  */
 
 import type { Atlas, Sprite } from './atlas';
+import { GroundPass } from './ground';
 
 const VERT = `#version 300 es
 precision highp float;
@@ -76,6 +77,9 @@ export class Renderer {
   /** Draw statistics for the perf overlay. */
   lastSpriteCount = 0;
 
+  /** The terrain, drawn as one continuous surface before any sprite. */
+  ground!: GroundPass;
+
   constructor(canvas: HTMLCanvasElement, atlas: Atlas, capacity = 24000) {
     this.canvas = canvas;
     const gl = canvas.getContext('webgl2', {
@@ -127,6 +131,7 @@ export class Renderer {
     gl.bindVertexArray(null);
 
     this.texture = this.uploadAtlas(atlas);
+    this.ground = new GroundPass(gl);
 
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);

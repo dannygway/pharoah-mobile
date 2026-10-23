@@ -69,6 +69,8 @@ export class World {
   readonly variant: Uint8Array;
   /** Elevation in decimetres above the low-water line; drives flooding and shading. */
   readonly height: Uint8Array;
+  /** Bumped whenever anything the ground pass draws has changed. */
+  groundVersion = 0;
 
   /** Scratch buffers for pathfinding, allocated once. */
   private visitStamp: Int32Array;
@@ -144,6 +146,7 @@ export class World {
   generate(opts: { riverWidth?: number; floodplainWidth?: number; rockiness?: number; seed?: number } = {}): void {
     const seed = opts.seed ?? this.seed;
     this.seed = seed;
+    this.groundVersion++;
     const rng = new RNG(seed);
     const N = this.size;
     const riverW = opts.riverWidth ?? 7;
@@ -538,6 +541,7 @@ export class World {
    * Tiles below the resulting water height are flagged flooded; farms on them stop.
    */
   applyFlood(level: number): void {
+    this.groundVersion++;
     const maxH = 12;
     const waterH = level * maxH;
     for (let i = 0; i < this.area; i++) {
@@ -552,6 +556,7 @@ export class World {
 
   /** Enrich the floodplain after the waters recede. `quality` 0..1. */
   depositSilt(quality: number): void {
+    this.groundVersion++;
     for (let i = 0; i < this.area; i++) {
       if (this.terrain[i] !== Terrain.Floodplain) continue;
       // Land the flood actually reached gains the most; the rest gains a little.

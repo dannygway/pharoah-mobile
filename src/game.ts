@@ -326,6 +326,7 @@ export class Game {
 
   arm(defId: string | null): void {
     this.armed = defId;
+    this.scene.showGrid = defId !== null;
     this.scene.previewTiles.length = 0;
     if (defId) {
       const def = BUILDING_BY_ID[defId];

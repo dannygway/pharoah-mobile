@@ -367,6 +367,7 @@ export class City {
     if (!free && this.funds < cost) return -1;
     if (!free) this.funds -= cost;
     w.road[i] = 1;
+    w.groundVersion++;
     // Plazas are recorded as a building so their desirability is tracked, but they
     // remain walkable road tiles.
     if (defId === 'plaza') {
@@ -421,7 +422,10 @@ export class City {
       if (!b) return false;
       const def = this.def(b);
       // Plaza tiles double as roads.
-      if (def.id === 'plaza') w.road[i] = 0;
+      if (def.id === 'plaza') {
+        w.road[i] = 0;
+        w.groundVersion++;
+      }
       for (let dy = 0; dy < b.size; dy++) {
         for (let dx = 0; dx < b.size; dx++) {
           const j = w.idx(b.x + dx, b.y + dy);
@@ -442,6 +446,7 @@ export class City {
     }
     if (w.road[i]) {
       w.road[i] = 0;
+      w.groundVersion++;
       this.funds -= 1;
       this.desirabilityDirty = true;
       this.markRoadNeighboursDirty(x, y);
@@ -688,6 +693,7 @@ export class City {
 
   /** Growing crops draw fertility out of the soil; only the flood puts it back. */
   private farmDrawdown(): void {
+    this.world.groundVersion++;
     for (const id of this.liveBuildings) {
       const b = this.buildings[id];
       if (!b) continue;

@@ -277,203 +277,13 @@ function groundShadow(ctx: CanvasRenderingContext2D, ox: number, oy: number, s: 
 // Terrain
 // ---------------------------------------------------------------------------
 
-const TERRAIN_PALETTES: Record<string, { base: string; hi: string; lo: string; fleck: string[] }> = {
-  desert:     { base: '#d8bd8a', hi: '#e6d0a4', lo: '#bfa171', fleck: ['#e8d4ab', '#c9a97c', '#d2b183'] },
-  dune:       { base: '#e0c795', hi: '#f0dcb0', lo: '#c4a677', fleck: ['#f2e0b8', '#cdb083'] },
-  grass:      { base: '#93a35e', hi: '#a9b872', lo: '#7a8a4b', fleck: ['#b3c07d', '#7f8f50', '#8fa063'] },
-  floodplain: { base: '#7d7042', hi: '#938351', lo: '#5f552f', fleck: ['#8d7e4c', '#6b6036', '#a08f5c'] },
-  fertile:    { base: '#5f5c30', hi: '#75703c', lo: '#454326', fleck: ['#6e6a38', '#4d4a29', '#7d7742'] },
-  marsh:      { base: '#5f6b45', hi: '#748052', lo: '#4a5436', fleck: ['#6f7c4e', '#526038'] },
-  rock:       { base: '#a8977f', hi: '#c0ae94', lo: '#7f7161', fleck: ['#b6a58c', '#8d7f6d', '#c9b89b'] },
-  water:      { base: '#3f7d96', hi: '#5c9db5', lo: '#2e6076', fleck: ['#4e8ea6', '#356e86'] },
-  flooded:    { base: '#6f8a86', hi: '#87a09a', lo: '#57706e', fleck: ['#7b9691', '#63807c'] },
-};
 
-function drawTerrainTile(ctx: CanvasRenderingContext2D, kind: string, variant: number, sc: number): void {
-  const p = TERRAIN_PALETTES[kind];
-  const rng = new RNG(hashStr(kind) + variant * 7919);
-  const tw = TILE_W * sc;
-  const th = TILE_H * sc;
-  const ox = tw / 2;
-  const oy = 0;
 
-  // Base diamond with a subtle vertical gradient so tiles read as lit from above.
-  const grad = ctx.createLinearGradient(0, 0, 0, th);
-  grad.addColorStop(0, p.hi);
-  grad.addColorStop(0.55, p.base);
-  grad.addColorStop(1, p.lo);
-  diamondPath(ctx, ox, oy, 1, tw, th);
-  ctx.save();
-  ctx.clip();
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, tw, th);
-  speckle(ctx, rng, 0, 0, tw, th, Math.round(26 * sc * sc), p.fleck);
-
-  if (kind === 'fertile' || kind === 'floodplain') {
-    // Faint plough lines running with the iso grid.
-    ctx.globalAlpha = 0.16;
-    ctx.strokeStyle = p.lo;
-    ctx.lineWidth = 1 * sc;
-    for (let i = -2; i <= 4; i++) {
-      ctx.beginPath();
-      ctx.moveTo(i * 10 * sc, 0);
-      ctx.lineTo(i * 10 * sc + tw / 2, th);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-  }
-  if (kind === 'rock') {
-    // Angular facets.
-    ctx.globalAlpha = 0.3;
-    for (let i = 0; i < 4; i++) {
-      ctx.fillStyle = rng.chance(0.5) ? p.hi : p.lo;
-      ctx.beginPath();
-      const cx = rng.float(6, tw - 6);
-      const cy = rng.float(4, th - 4);
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(cx + rng.float(4, 12) * sc, cy + rng.float(-4, 4) * sc);
-      ctx.lineTo(cx + rng.float(-6, 8) * sc, cy + rng.float(3, 9) * sc);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }
-  if (kind === 'dune') {
-    ctx.globalAlpha = 0.35;
-    ctx.strokeStyle = p.hi;
-    ctx.lineWidth = 1.4 * sc;
-    ctx.beginPath();
-    ctx.moveTo(tw * 0.15, th * 0.62);
-    ctx.quadraticCurveTo(tw * 0.5, th * 0.28, tw * 0.85, th * 0.55);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-  ctx.restore();
-
-  // A whisper of an edge. Anything stronger and the ground reads as graph paper
-  // rather than as land.
-  ctx.save();
-  diamondPath(ctx, ox, oy, 1, tw, th);
-  ctx.strokeStyle = shade(p.lo, 0.96, 0.10);
-  ctx.lineWidth = 1 * sc;
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawWaterTile(ctx: CanvasRenderingContext2D, frame: number, sc: number): void {
-  const p = TERRAIN_PALETTES.water;
-  const tw = TILE_W * sc;
-  const th = TILE_H * sc;
-  const ox = tw / 2;
-  const rng = new RNG(4242 + frame * 131);
-
-  diamondPath(ctx, ox, 0, 1, tw, th);
-  ctx.save();
-  ctx.clip();
-  const grad = ctx.createLinearGradient(0, 0, 0, th);
-  grad.addColorStop(0, p.hi);
-  grad.addColorStop(0.6, p.base);
-  grad.addColorStop(1, p.lo);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, tw, th);
-
-  // Animated glints. Each frame shifts the sine phase so the river shimmers.
-  const phase = (frame / 4) * Math.PI * 2;
-  ctx.globalAlpha = 0.5;
-  ctx.strokeStyle = '#a8d4e2';
-  ctx.lineWidth = 1.2 * sc;
-  for (let i = 0; i < 3; i++) {
-    const yy = th * (0.28 + i * 0.22) + Math.sin(phase + i) * 1.6 * sc;
-    ctx.beginPath();
-    ctx.moveTo(tw * 0.18, yy);
-    ctx.quadraticCurveTo(tw * 0.5, yy - 2.4 * sc, tw * 0.82, yy);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 0.22;
-  speckle(ctx, rng, 0, 0, tw, th, Math.round(10 * sc * sc), ['#bfe2ee', '#2e6076']);
-  ctx.restore();
-}
 
 // ---------------------------------------------------------------------------
 // Roads
 // ---------------------------------------------------------------------------
 
-/**
- * Roads are drawn per connectivity mask so junctions and corners join up properly.
- * Bit 1 = north (−y), 2 = east (+x), 4 = south (+y), 8 = west (−x).
- */
-function drawRoadTile(ctx: CanvasRenderingContext2D, mask: number, paved: boolean, sc: number): void {
-  const tw = TILE_W * sc;
-  const th = TILE_H * sc;
-  const ox = tw / 2;
-  const rng = new RNG(mask * 3301 + (paved ? 17 : 0));
-
-  const base = paved ? '#ded2b2' : '#8a7048';
-  const edgeColor = paved ? '#f0e6c8' : '#c4a878';
-
-  diamondPath(ctx, ox, 0, 1, tw, th);
-  ctx.save();
-  ctx.clip();
-  ctx.fillStyle = base;
-  ctx.fillRect(0, 0, tw, th);
-  speckle(ctx, rng, 0, 0, tw, th, Math.round(22 * sc * sc),
-    paved ? ['#efe4c4', '#c8bb98'] : ['#9c8054', '#78603c', '#a89066']);
-
-  if (paved) {
-    // Flagstone joints along both iso axes.
-    ctx.globalAlpha = 0.35;
-    ctx.strokeStyle = '#9c8f6c';
-    ctx.lineWidth = 1 * sc;
-    for (let i = 1; i < 3; i++) {
-      ctx.beginPath();
-      ctx.moveTo((i * tw) / 3, 0);
-      ctx.lineTo((i * tw) / 3 - tw / 2, th);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo((i * tw) / 3, 0);
-      ctx.lineTo((i * tw) / 3 + tw / 2, th);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-  } else {
-    // Wheel ruts in the direction of travel.
-    ctx.globalAlpha = 0.42;
-    ctx.strokeStyle = '#63502f';
-    ctx.lineWidth = 2.2 * sc;
-    const dirs: [number, number][] = [];
-    if (mask & 1) dirs.push([0.5, 0]);
-    if (mask & 2) dirs.push([1, 0.5]);
-    if (mask & 4) dirs.push([0.5, 1]);
-    if (mask & 8) dirs.push([0, 0.5]);
-    for (const [fx, fy] of dirs) {
-      ctx.beginPath();
-      ctx.moveTo(tw * 0.5, th * 0.5);
-      ctx.lineTo(tw * fx, th * fy);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-  }
-  ctx.restore();
-
-  // Kerb on the edges with no connection, so a road end reads as an end.
-  ctx.save();
-  ctx.strokeStyle = edgeColor;
-  ctx.lineWidth = 2.2 * sc;
-  const corners = {
-    T: [ox, 0], R: [ox + tw / 2, th / 2], B: [ox, th], L: [ox - tw / 2, th / 2],
-  } as Record<string, number[]>;
-  const edges: [string, string, number][] = [
-    ['L', 'T', 1], ['T', 'R', 2], ['R', 'B', 4], ['B', 'L', 8],
-  ];
-  for (const [a, b, bit] of edges) {
-    if (mask & bit) continue;
-    ctx.beginPath();
-    ctx.moveTo(corners[a][0], corners[a][1]);
-    ctx.lineTo(corners[b][0], corners[b][1]);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
 
 // ---------------------------------------------------------------------------
 // Natural features
@@ -1687,33 +1497,7 @@ export function buildAtlas(onProgress?: (f: number) => void): Atlas {
   const SC = 2;
   const BIG_SC = 1;
 
-  const terrainKinds = ['desert', 'dune', 'grass', 'floodplain', 'fertile', 'marsh', 'rock', 'flooded'];
-  for (const kind of terrainKinds) {
-    for (let v = 0; v < 3; v++) {
-      jobs.push({
-        name: `t_${kind}_${v}`,
-        w: TILE_W * SC, h: TILE_H * SC, scale: SC, ax: (TILE_W * SC) / 2, ay: 0,
-        draw: (ctx) => drawTerrainTile(ctx, kind, v, SC),
-      });
-    }
-  }
-  for (let f = 0; f < 4; f++) {
-    jobs.push({
-      name: `t_water_${f}`,
-      w: TILE_W * SC, h: TILE_H * SC, scale: SC, ax: (TILE_W * SC) / 2, ay: 0,
-      draw: (ctx) => drawWaterTile(ctx, f, SC),
-    });
-  }
-
-  for (let mask = 0; mask < 16; mask++) {
-    for (const paved of [false, true]) {
-      jobs.push({
-        name: `road_${paved ? 'p' : 'd'}_${mask}`,
-        w: TILE_W * SC, h: TILE_H * SC, scale: SC, ax: (TILE_W * SC) / 2, ay: 0,
-        draw: (ctx) => drawRoadTile(ctx, mask, paved, SC),
-      });
-    }
-  }
+  // Terrain and roads are painted by the ground pass (ground.ts), not as sprites.
 
   const featureDraws: [string, (ctx: CanvasRenderingContext2D, v: number) => void, number][] = [
     ['palm', (c, v) => drawPalm(c, SC, v), 56],
@@ -1768,20 +1552,44 @@ export function buildAtlas(onProgress?: (f: number) => void): Atlas {
       },
     });
   }
-  // An empty, unclaimed housing lot.
+  // An empty, unclaimed housing lot: four corner pegs and a small placard on a stake,
+  // the way a surveyor marks a plot. No fill — a district of lots waiting for settlers
+  // should read as marked ground, not as a checkerboard.
   jobs.push({
     name: 'house_empty',
-    w: TILE_W * SC, h: TILE_H * SC + 8 * SC, scale: SC, ax: (TILE_W * SC) / 2, ay: 8 * SC,
+    w: TILE_W * SC, h: TILE_H * SC + 20 * SC, scale: SC, ax: (TILE_W * SC) / 2, ay: 20 * SC,
     draw: (ctx) => {
-      const oy = 8 * SC;
-      diamondPath(ctx, (TILE_W * SC) / 2, oy, 1, TILE_W * SC, TILE_H * SC);
-      ctx.fillStyle = 'rgba(180,150,105,0.5)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(120,95,60,0.8)';
-      ctx.setLineDash([5 * SC, 4 * SC]);
-      ctx.lineWidth = 1.6 * SC;
+      const oy = 20 * SC;
+      const cx = (TILE_W * SC) / 2;
+      const hw = (TILE_W * SC) / 2 * 0.72;
+      const hh = (TILE_H * SC) / 2 * 0.72;
+      const my = oy + (TILE_H * SC) / 2;
+      // Faint string between the pegs.
+      ctx.strokeStyle = 'rgba(110,84,52,0.38)';
+      ctx.lineWidth = 0.8 * SC;
+      ctx.beginPath();
+      ctx.moveTo(cx, my - hh);
+      ctx.lineTo(cx + hw, my);
+      ctx.lineTo(cx, my + hh);
+      ctx.lineTo(cx - hw, my);
+      ctx.closePath();
       ctx.stroke();
-      ctx.setLineDash([]);
+      // Pegs.
+      ctx.fillStyle = '#6e5233';
+      for (const [px, py] of [[cx, my - hh], [cx + hw, my], [cx, my + hh], [cx - hw, my]]) {
+        ctx.fillRect(px - 0.9 * SC, py - 3.2 * SC, 1.8 * SC, 3.6 * SC);
+      }
+      // Placard on a stake.
+      ctx.fillStyle = '#7a5a36';
+      ctx.fillRect(cx - 0.8 * SC, my - 13 * SC, 1.6 * SC, 13 * SC);
+      ctx.fillStyle = '#e9dcbf';
+      ctx.fillRect(cx - 5 * SC, my - 17 * SC, 10 * SC, 6 * SC);
+      ctx.strokeStyle = '#7a5a36';
+      ctx.lineWidth = 0.9 * SC;
+      ctx.strokeRect(cx - 5 * SC, my - 17 * SC, 10 * SC, 6 * SC);
+      ctx.fillStyle = '#9c6b3c';
+      ctx.fillRect(cx - 3 * SC, my - 15 * SC, 6 * SC, 0.9 * SC);
+      ctx.fillRect(cx - 3 * SC, my - 13.3 * SC, 4 * SC, 0.9 * SC);
     },
   });
 

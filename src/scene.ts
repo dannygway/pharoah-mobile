@@ -125,6 +125,9 @@ const SEASON_LIGHT: Record<string, [number, number, number]> = {
   shemu: [1.06, 1.01, 0.92],
 };
 
+/** What lies past the edge of the map: the dark of an unexplored desert night. */
+const BACKDROP = [0.075, 0.062, 0.05];
+
 export class Scene {
   atlas: Atlas;
   renderer: Renderer;
@@ -140,6 +143,8 @@ export class Scene {
   previewTiles: number[] = [];
   /** Currently inspected building id. */
   selected = -1;
+  /** Faint tile grid on the ground, shown while a building is armed. */
+  showGrid = false;
 
   /**
    * Reachability halo, when the player has asked to see one. Held here rather than
@@ -184,7 +189,7 @@ export class Scene {
 
     // Sky/backdrop colour shifts with the season.
     const light = SEASON_LIGHT[city.season] ?? [1, 1, 1];
-    r.begin([0.09 * light[0], 0.10 * light[1], 0.13 * light[2]]);
+    r.begin(BACKDROP as [number, number, number]);
 
     // Visible tile bounds, from the four screen corners.
     const corners: [number, number][] = [
@@ -207,8 +212,15 @@ export class Scene {
     const y0 = clamp(Math.floor(minY) - 3, 0, w.size - 1);
     const y1 = clamp(Math.ceil(maxY) + 10, 0, w.size - 1);
 
-    this.drawTerrain(city, x0, y0, x1, y1, time, light);
-    this.drawRoads(city, x0, y0, x1, y1, light);
+    r.ground.draw({
+      world: w, camX: cam.x, camY: cam.y, zoom: cam.zoom,
+      viewW: r.viewW, viewH: r.viewH, canvasH: r.canvas.height, dpr: r.dpr,
+      time, dt, light, grid: this.showGrid ? 1 : 0, back: BACKDROP,
+      pavedAt: (i) => {
+        const id = w.building[i];
+        return id >= 0 && city.buildings[id]?.defId === 'plaza';
+      },
+    });
     if (this.overlay === 'problems') {
       this.problemTimer += dt;
       if (this.problemTimer > 0.5) {
@@ -225,90 +237,6 @@ export class Scene {
   }
 
   // -------------------------------------------------------------------------
-
-  private drawTerrain(city: City, x0: number, y0: number, x1: number, y1: number, time: number, light: number[]): void {
-    const r = this.renderer;
-    const w = city.world;
-    const a = this.atlas;
-    const waterFrame = Math.floor(time * 3.2) % 4;
-    const waterSp = a.get(`t_water_${waterFrame}`);
-    const floodSp = [a.get('t_flooded_0'), a.get('t_flooded_1'), a.get('t_flooded_2')];
-
-    for (let ty = y0; ty <= y1; ty++) {
-      for (let tx = x0; tx <= x1; tx++) {
-        const i = w.idx(tx, ty);
-        const [wx, wy] = tileToWorld(tx, ty);
-        const v = w.variant[i] % 3;
-        const terr = w.terrain[i];
-
-        let sp: Sprite;
-        let tintR = light[0];
-        let tintG = light[1];
-        let tintB = light[2];
-
-        switch (terr) {
-          case Terrain.Water:
-            sp = waterSp;
-            break;
-          case Terrain.Floodplain: {
-            const fert = w.fertility[i];
-            sp = a.get(fert > 58 ? `t_fertile_${v}` : `t_floodplain_${v}`);
-            // Darker, richer soil where fertility is highest.
-            const f = clamp(fert / 100, 0, 1);
-            tintR *= 1.06 - f * 0.16;
-            tintG *= 1.04 - f * 0.10;
-            tintB *= 0.98 - f * 0.06;
-            break;
-          }
-          case Terrain.Marsh:
-            sp = a.get(`t_marsh_${v}`);
-            break;
-          case Terrain.Rock:
-            sp = a.get(`t_rock_${v}`);
-            break;
-          case Terrain.Dune:
-            sp = a.get(`t_dune_${v}`);
-            break;
-          case Terrain.Grass:
-            sp = a.get(`t_grass_${v}`);
-            break;
-          default:
-            sp = a.get(`t_desert_${v}`);
-        }
-
-        r.draw(sp, wx, wy, 1, tintR, tintG, tintB, 1);
-
-        // The inundation lies over the floodplain as translucent water.
-        if (w.flooded[i]) {
-          r.draw(floodSp[v], wx, wy, 1, 0.86, 0.96, 1.0, 0.78);
-          if ((tx + ty + waterFrame) % 7 === 0) {
-            r.draw(waterSp, wx, wy, 1, 1, 1, 1, 0.20);
-          }
-        }
-      }
-    }
-  }
-
-  private drawRoads(city: City, x0: number, y0: number, x1: number, y1: number, light: number[]): void {
-    const r = this.renderer;
-    const w = city.world;
-    const a = this.atlas;
-    for (let ty = y0; ty <= y1; ty++) {
-      for (let tx = x0; tx <= x1; tx++) {
-        const i = w.idx(tx, ty);
-        if (!w.road[i]) continue;
-        let mask = 0;
-        if (ty > 0 && w.road[i - w.size]) mask |= 1;
-        if (tx < w.size - 1 && w.road[i + 1]) mask |= 2;
-        if (ty < w.size - 1 && w.road[i + w.size]) mask |= 4;
-        if (tx > 0 && w.road[i - 1]) mask |= 8;
-        const bId = w.building[i];
-        const paved = bId >= 0 && city.buildings[bId]?.defId === 'plaza';
-        const [wx, wy] = tileToWorld(tx, ty);
-        r.draw(a.get(`road_${paved ? 'p' : 'd'}_${mask}`), wx, wy, 1, light[0], light[1], light[2], 1);
-      }
-    }
-  }
 
   // -------------------------------------------------------------------------
 
@@ -389,7 +317,8 @@ export class Scene {
     const r = this.renderer;
     const a = this.atlas;
     const def = BUILDING_BY_ID[b.defId];
-    if (def.id === 'road') return;
+    // Roads and plaza paving are part of the ground pass.
+    if (def.id === 'road' || def.id === 'plaza') return;
     const [wx, wy] = tileToWorld(b.x, b.y);
 
     let tR = light[0];
